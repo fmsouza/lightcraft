@@ -353,8 +353,8 @@ fn undo_button(ui: &mut egui::Ui, id: &str, tip: &str, redo: bool) -> egui::Resp
     r
 }
 
-/// The library's bottom bar: the grid sizes and Detail, Sort, Select, and Edit (opens the
-/// editor on the photo). In Select mode by finger it is the selection's bar instead
+/// The library's bottom bar: the grid sizes and Detail, Sort and Select (a tap on a photo opens
+/// the editor, so there is no Edit button). In Select mode by finger it is the selection's bar instead
 /// ([`select_bar`]).
 fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -369,7 +369,6 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .exact_size(t.bottom_bar_h + 4.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN, right: BAR_MARGIN, top: 0, bottom: 0 }))
         .show(ui, |ui| {
-            let full = ui.max_rect();
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (id, icon, mode, tip) in [
@@ -385,25 +384,6 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 egui::Popup::menu(&sort).show(|ui| super::bottombar::sort_menu(app, ui));
                 super::bottombar::select_mode_button(app, ui);
             });
-            let mut right = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(Rect::from_min_max(pos2(full.center().x, full.top()), full.max))
-                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
-            );
-            right.spacing_mut().item_spacing.x = 2.0;
-            let has_photo = app.session.active().is_some();
-            // Edit: the photo in the editor, on the Edit panel (the grid's own sheet, when one of
-            // Info, Keywords … is up, is put away)
-            if icon_button(&mut right, "edit", Icon::Sliders, BUTTON, sheet_open(app), has_photo, "Edit (E)").clicked() {
-                if sheet_open(app) {
-                    close_sheet(app);
-                } else {
-                    let _ = app.run("view.detail", json!({}));
-                    if app.ui.right == RightPanel::None && !app.ui.presets {
-                        let _ = app.run("panel.edit", json!({}));
-                    }
-                }
-            }
         });
 }
 
