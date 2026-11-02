@@ -354,9 +354,17 @@ fn undo_button(ui: &mut egui::Ui, id: &str, tip: &str, redo: bool) -> egui::Resp
 }
 
 /// The library's bottom bar: the grid sizes and Detail, Sort, Select, and Edit (opens the
-/// editor on the photo).
+/// editor on the photo). In Select mode by finger it is the selection's bar instead
+/// ([`select_bar`]).
 fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    if app.ui.select_mode && crate::widgets::touch_screen(ui.ctx()) {
+        egui::Panel::bottom("bottom_bar")
+            .exact_size(t.bottom_bar_h + 4.0)
+            .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN + 6, right: BAR_MARGIN, top: 0, bottom: 0 }))
+            .show(ui, |ui| select_bar(app, ui));
+        return;
+    }
     egui::Panel::bottom("bottom_bar")
         .exact_size(t.bottom_bar_h + 4.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN, right: BAR_MARGIN, top: 0, bottom: 0 }))
@@ -397,6 +405,46 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             }
         });
+}
+
+/// Select mode's bar: how many photos are selected, then Share (export), Album, Move to Folder,
+/// Delete, and Done (leaves Select mode).
+fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let n = app.session.selection.ids.len();
+    let any = n > 0;
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let count = if any { crate::i18n::tr_format!("{n} selected", n = n) } else { crate::i18n::tr("Select Photos").to_string() };
+        ui.label(egui::RichText::new(count).font(t.semibold(14.0)).color(t.text));
+        let full = ui.max_rect();
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_max(pos2(full.center().x - 60.0, full.top()), full.max))
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        right.spacing_mut().item_spacing.x = 2.0;
+        let done = right.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Done")).font(t.semibold(14.0)).color(t.accent)).frame(false));
+        register(&right, "button:selectDone", done.rect);
+        if done.clicked() {
+            let _ = app.run("view.selectMode", json!({"on": false}));
+        }
+        if icon_button(&mut right, "selectDelete", Icon::Trash, BUTTON, false, any, "Delete").clicked() {
+            let _ = crate::menubar::run_item(app, "photo.delete", json!({}));
+        }
+        if crate::panels::grid::can_move_to_folder(app)
+            && icon_button(&mut right, "selectMove", Icon::Folder, BUTTON, false, any, "Move to Folder…").clicked()
+        {
+            crate::panels::grid::move_to_folder(app, right.ctx());
+        }
+        let album = icon_button(&mut right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
+        if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
+            egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
+        }
+        if icon_button(&mut right, "selectShare", Icon::Share, BUTTON, false, any, "Export").clicked() {
+            let _ = app.run("dialog.export", json!({}));
+        }
+    });
 }
 
 fn close_sheet(app: &mut LightcraftApp) {

@@ -6,7 +6,7 @@ mod header_tests;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, PhotoId, SortKey, StackId};
 use serde_json::json;
 
@@ -416,12 +416,16 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let scroll_rect = ui.available_rect_before_wrap();
     crate::widgets::register(ui, "grid:scroll", scroll_rect);
     let wheel = wheel_step(ui, egui::Id::unique("grid-wheel"), scroll_rect, scroll_rect.height(), false);
-    egui::ScrollArea::vertical().id_salt("grid-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
+    // a finger selecting photos by sliding doesn't scroll the grid as well
+    let drag = if slide_selecting(ui.ctx()) { egui::scroll_area::DragScroll::Never } else { egui::scroll_area::DragScroll::OnTouch };
+    let source = egui::scroll_area::ScrollSource { drag, ..Default::default() };
+    egui::ScrollArea::vertical().id_salt("grid-scroll").scroll_source(source).auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
         if wheel != egui::Vec2::ZERO {
             ui.scroll_with_delta_animation(wheel, egui::style::ScrollAnimation::none());
         }
         let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), total_h), Sense::hover());
         let origin = area.min;
+        slide_select(app, ui, &ids, &lay.cells, origin, scroll_rect);
         app.grid_scroll = Some(viewport.top());
         if let Some(r) = scroll_to {
             ui.scroll_to_rect(r.translate(origin.to_vec2()), None);
@@ -1029,6 +1033,10 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         }
         return;
     }
+    let finger = crate::widgets::finger(ui.ctx());
+    if finger && touch_cell(app, ui, resp, id) {
+        return;
+    }
     if resp.clicked() {
         let m = ui.input(|i| i.modifiers);
         let mode = if m.shift {
@@ -1049,7 +1057,164 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     if resp.drag_started_by(egui::PointerButton::Primary) {
         begin_photo_drag(app, id);
     }
-    crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
+    // by finger a long press starts Select mode instead (`touch_cell`); a menu a mouse or
+    // trackpad opened stays up while a finger uses it
+    if !finger || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(resp)) {
+        crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
+    }
+}
+
+/// A finger on a cell, as in a phone's photo library: a tap opens the photo (in Select mode it
+/// takes the photo in or out of the selection), a long press starts Select mode with the photo
+/// selected. True when the cell's response was handled here.
+fn touch_cell(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, id: PhotoId) -> bool {
+    let held = egui::Id::unique("grid-long-pressed");
+    if resp.long_touched() {
+        if !app.ui.select_mode {
+            let _ = app.run("view.selectMode", json!({"on": true}));
+            let _ = app.run("library.select", json!({"ids": [id.0], "mode": "replace"}));
+        } else if !app.session.selection.contains(id) {
+            let _ = app.run("library.select", json!({"ids": [id.0], "mode": "add"}));
+        }
+        // the release that ends the press is not a tap as well
+        ui.ctx().data_mut(|d| d.insert_temp(held, id.0));
+        return true;
+    }
+    if resp.clicked() {
+        if ui.ctx().data_mut(|d| d.remove_temp::<u64>(held)) == Some(id.0) {
+            return true;
+        }
+        if app.ui.select_mode {
+            let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
+        } else {
+            let _ = app.run("library.select", json!({"ids": [id.0], "mode": "replace"}));
+            let _ = app.run("view.detail", json!({}));
+        }
+        return true;
+    }
+    resp.double_clicked()
+}
+
+/// A finger sliding across the grid in Select mode: sideways from a photo it selects (or, from a
+/// selected photo, deselects) every photo between that one and the one under the finger, in grid
+/// order, as a phone's photo library does; up or down it scrolls. Near the top or bottom edge a
+/// selecting slide scrolls on by itself.
+#[derive(Clone)]
+enum Slide {
+    /// The finger went down on photo `index` at `origin`; which way it goes isn't known yet.
+    Pressed {
+        origin: Pos2,
+        index: usize,
+    },
+    /// Scrolling (or pressed between photos): nothing to select until the finger lifts.
+    Scrolling,
+    Selecting(SlideSelect),
+}
+
+#[derive(Clone)]
+struct SlideSelect {
+    /// The photo the slide started on.
+    anchor: usize,
+    /// The selection when it started.
+    base: std::sync::Arc<Vec<PhotoId>>,
+    /// Started on a selected photo: the slide takes photos out.
+    remove: bool,
+    /// The photo under the finger when the selection was last set.
+    last: Option<usize>,
+}
+
+fn slide_id() -> egui::Id {
+    egui::Id::unique("grid-slide-select")
+}
+
+/// Whether a slide is selecting (the grid then doesn't scroll with the finger).
+fn slide_selecting(ctx: &egui::Context) -> bool {
+    matches!(ctx.data(|d| d.get_temp::<Slide>(slide_id())), Some(Slide::Selecting(_)))
+}
+
+/// Distance (points) a finger moves before the slide counts as sideways or up and down.
+const SLIDE_START: f32 = 10.0;
+/// Within this of the grid's top or bottom edge a selecting slide scrolls.
+const SLIDE_EDGE: f32 = 56.0;
+
+/// Follows a finger's slide (see [`Slide`]); `cells` are the photos' rectangles in the grid's
+/// content, which starts at `origin`; `edges` is the grid on screen.
+fn slide_select(app: &mut LightcraftApp, ui: &egui::Ui, ids: &[PhotoId], cells: &[Rect], origin: Pos2, edges: Rect) {
+    let ctx = ui.ctx().clone();
+    let on = crate::widgets::finger(&ctx) && app.ui.select_mode && app.ui.keyword_painter.is_none();
+    let (pressed, down, pos) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos()));
+    let (true, true, Some(pos)) = (on, down || pressed, pos) else {
+        ctx.data_mut(|d| d.remove::<Slide>(slide_id()));
+        return;
+    };
+    let index_at = |p: Pos2| {
+        let q = p - origin.to_vec2();
+        cells.iter().position(|c| c.contains(q))
+    };
+    let mut slide = ctx.data(|d| d.get_temp::<Slide>(slide_id()));
+    if pressed || slide.is_none() {
+        slide = Some(match index_at(pos).filter(|_| edges.contains(pos)) {
+            Some(index) => Slide::Pressed { origin: pos, index },
+            None => Slide::Scrolling,
+        });
+    }
+    let slide = match slide {
+        Some(Slide::Pressed { origin: from, index }) => {
+            let d = pos - from;
+            if d.length() < SLIDE_START {
+                Slide::Pressed { origin: from, index }
+            } else if d.x.abs() > d.y.abs() {
+                let base: Vec<PhotoId> = app.session.selection.ids.clone();
+                let remove = ids.get(index).is_some_and(|id| base.contains(id));
+                Slide::Selecting(SlideSelect { anchor: index, base: std::sync::Arc::new(base), remove, last: None })
+            } else {
+                Slide::Scrolling
+            }
+        }
+        Some(Slide::Selecting(mut s)) => {
+            if let Some(i) = index_at(pos)
+                && s.last != Some(i)
+            {
+                select_range(app, ids, &s, i);
+                s.last = Some(i);
+            }
+            let step = if pos.y < edges.top() + SLIDE_EDGE {
+                12.0
+            } else if pos.y > edges.bottom() - SLIDE_EDGE {
+                -12.0
+            } else {
+                0.0
+            };
+            if step != 0.0 {
+                ui.scroll_with_delta_animation(vec2(0.0, step), egui::style::ScrollAnimation::none());
+                // the photo under the finger changes as the grid moves under it
+                s.last = None;
+                ctx.request_repaint();
+            }
+            Slide::Selecting(s)
+        }
+        _ => Slide::Scrolling,
+    };
+    if let Slide::Selecting(s) = &slide
+        && s.last.is_none()
+        && let Some(i) = index_at(pos)
+    {
+        select_range(app, ids, s, i);
+    }
+    ctx.data_mut(|d| d.insert_temp(slide_id(), slide));
+}
+
+/// The selection a slide from `s.anchor` to photo `to` gives: the photos between them (both
+/// included) added to, or taken out of, the selection it started from.
+fn select_range(app: &mut LightcraftApp, ids: &[PhotoId], s: &SlideSelect, to: usize) {
+    let (lo, hi) = (s.anchor.min(to), s.anchor.max(to));
+    let Some(range) = ids.get(lo..=hi) else { return };
+    let chosen: Vec<u64> = if s.remove {
+        s.base.iter().filter(|id| !range.contains(id)).map(|id| id.0).collect()
+    } else {
+        s.base.iter().chain(range.iter().filter(|id| !s.base.contains(id))).map(|id| id.0).collect()
+    };
+    let _ = app.run("library.select", json!({"ids": chosen, "mode": "replace"}));
 }
 
 struct ThumbFlags {
@@ -1432,7 +1597,7 @@ fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub(crate) fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if local_only(app, &app.session.selected()) {
         // albums hold library photos (issue #684): nothing here to add until they join My Photos
         let add = ui.add_enabled(false, egui::Button::new(crate::i18n::tr("Add to Album"))).on_disabled_hover_text(albums_hint());
@@ -1477,25 +1642,34 @@ fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
     }
 }
 
+/// Whether the host can ask for a folder (Move to Folder…).
+pub(crate) fn can_move_to_folder(app: &LightcraftApp) -> bool {
+    app.services.pick_folder.is_some() || app.services.picker.is_some()
+}
+
+/// Move to Folder…: asks for the folder, then moves the selected photos' files there.
+pub(crate) fn move_to_folder(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // the folder dialog goes through the shared picker (off the UI thread where the host has
+    // one: then photo.moveToFolder runs when it closes)
+    let req = crate::pick::PickRequest::folder(crate::i18n::tr("Move to Folder…"));
+    let picked =
+        crate::pick::ask(app, "photo.moveToFolder", &json!({}), "folder", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x]));
+    if let crate::pick::Picked::Now(v) = picked
+        && let Some(into) = v.into_iter().next()
+    {
+        match app.run("photo.moveToFolder", json!({"folder": into})) {
+            Ok(r) => app.toast(ctx, crate::i18n::tr_format!("Moved {} photo(s)", r["moved"])),
+            Err(e) => app.toast(ctx, e),
+        }
+    }
+}
+
 fn context_menu_file_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if ui.button(crate::i18n::tr("Rename…")).clicked() {
         let _ = app.run("dialog.rename", json!({}));
     }
-    let can_pick = app.services.pick_folder.is_some() || app.services.picker.is_some();
-    if can_pick && ui.button(crate::i18n::tr("Move to Folder…")).clicked() {
-        // the folder dialog goes through the shared picker (off the UI thread where the host has
-        // one: then photo.moveToFolder runs when it closes)
-        let req = crate::pick::PickRequest::folder(crate::i18n::tr("Move to Folder…"));
-        let picked =
-            crate::pick::ask(app, "photo.moveToFolder", &json!({}), "folder", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x]));
-        if let crate::pick::Picked::Now(v) = picked
-            && let Some(into) = v.into_iter().next()
-        {
-            match app.run("photo.moveToFolder", json!({"folder": into})) {
-                Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved {} photo(s)", r["moved"])),
-                Err(e) => app.toast(ui.ctx(), e),
-            }
-        }
+    if can_move_to_folder(app) && ui.button(crate::i18n::tr("Move to Folder…")).clicked() {
+        move_to_folder(app, ui.ctx());
     }
     if ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
         // the files are read in the background (activity row `reload`)

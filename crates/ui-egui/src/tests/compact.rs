@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::state::RightPanel;
+use crate::state::{RightPanel, ViewMode};
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -535,4 +535,121 @@ fn phone_more_menu_offers_what_the_screen_needs() {
         assert!(widget(&h, id).is_some(), "{id} in the library's menu");
     }
     assert!(widget(&h, "more:develop.copy").is_none(), "no editor items in the library");
+}
+
+/// A finger along `points`: down at the first, through the others a frame each, up at the last.
+fn touch_path(h: &mut Headless, points: &[egui::Pos2], hold_frames: usize) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let (Some(&first), Some(&last)) = (points.first(), points.last()) else { return };
+    h.input([finger(1, egui::TouchPhase::Start, first), egui::Event::PointerMoved(first), button(first, true)]);
+    h.step();
+    for _ in 0..hold_frames {
+        h.step();
+    }
+    for &p in &points[1..] {
+        h.input([finger(1, egui::TouchPhase::Move, p), egui::Event::PointerMoved(p)]);
+        h.step();
+    }
+    h.input([finger(1, egui::TouchPhase::End, last), button(last, false), egui::Event::PointerGone]);
+    h.step();
+    h.step();
+}
+
+/// The grid's photos in order with the centres of those on screen.
+fn grid_cells(h: &mut Headless) -> Vec<(lightcraft_catalog::PhotoId, egui::Pos2)> {
+    let order = h.app.session.visible_shared().1;
+    order.iter().filter_map(|id| widget(h, &format!("thumb:{}", id.0)).map(|r| (*id, r.center()))).collect()
+}
+
+fn selected(h: &Headless) -> Vec<lightcraft_catalog::PhotoId> {
+    let mut v = h.app.session.selection.ids.clone();
+    v.sort_by_key(|id| id.0);
+    v
+}
+
+#[test]
+fn phone_grid_tap_opens_the_photo() {
+    let mut h = demo(PHONE, json!({"view": "squareGrid"}));
+    touch_screen(&mut h);
+    let cells = grid_cells(&mut h);
+    let (id, at) = cells[4];
+    touch_path(&mut h, &[at], 0);
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "one tap opens the photo");
+    assert_eq!(h.app.session.selection.active, Some(id));
+    // the same photo again, once back in the grid: still one tap
+    let r = h.request("ui.set", json!({"view": "squareGrid"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let at = grid_cells(&mut h).into_iter().find(|(i, _)| *i == id).map(|(_, p)| p).expect("on screen");
+    touch_path(&mut h, &[at], 0);
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "a selected photo opens with one tap too");
+}
+
+#[test]
+fn phone_grid_long_press_starts_select_mode_without_a_menu() {
+    let mut h = demo(PHONE, json!({"view": "squareGrid"}));
+    touch_screen(&mut h);
+    let (id, at) = grid_cells(&mut h)[2];
+    touch_path(&mut h, &[at], 60);
+    assert!(h.app.ui.select_mode, "a long press starts Select mode");
+    assert_eq!(selected(&h), vec![id], "with that photo selected (its release doesn't take it out again)");
+    assert_eq!(h.app.ui.view, ViewMode::SquareGrid, "and stays in the grid");
+    assert!(widget(&h, "button:contextDeletePhoto").is_none(), "no desktop context menu");
+    assert!(widget(&h, "button:selectDone").is_some() && widget(&h, "icon:selectDelete").is_some(), "the selection's bar");
+    // taps now add photos and take them out
+    let (other, at2) = grid_cells(&mut h)[5];
+    touch_path(&mut h, &[at2], 0);
+    let mut both = vec![id, other];
+    both.sort_by_key(|i| i.0);
+    assert_eq!(selected(&h), both);
+    touch_path(&mut h, &[at2], 0);
+    assert_eq!(selected(&h), vec![id]);
+    click(&mut h, "button:selectDone");
+    assert!(!h.app.ui.select_mode);
+}
+
+#[test]
+fn phone_grid_slide_selects_a_run_of_photos() {
+    let mut h = demo(PHONE, json!({"view": "squareGrid"}));
+    touch_screen(&mut h);
+    h.app.ui.select_mode = true;
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [], "mode": "replace"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let cells = grid_cells(&mut h);
+    let (from, to) = (cells[1], cells[7]);
+    // sideways first (that's what makes it select), then on to a photo two rows down
+    let start = from.1;
+    let side = start + egui::vec2(30.0, 0.0);
+    let mut path = vec![start, start + egui::vec2(12.0, 0.0), side];
+    for i in 1..=8 {
+        path.push(side + (to.1 - side) * (i as f32 / 8.0));
+    }
+    touch_path(&mut h, &path, 0);
+    let mut run: Vec<_> = cells[1..=7].iter().map(|(id, _)| *id).collect();
+    run.sort_by_key(|i| i.0);
+    assert_eq!(selected(&h), run, "every photo from the first to the last, in grid order");
+    // a slide starting on a selected photo takes the run out again
+    let path: Vec<_> = path.iter().rev().copied().collect();
+    let back = grid_cells(&mut h);
+    assert_eq!(back[7].1, to.1, "the grid didn't scroll");
+    touch_path(&mut h, &[to.1, to.1 - egui::vec2(12.0, 0.0), to.1 - egui::vec2(30.0, 0.0), path[path.len() - 1]], 0);
+    assert!(selected(&h).is_empty(), "{:?}", selected(&h));
+}
+
+#[test]
+fn phone_grid_drag_up_scrolls_without_selecting() {
+    let mut h = demo(PHONE, json!({"view": "squareGrid"}));
+    touch_screen(&mut h);
+    h.app.ui.select_mode = true;
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [], "mode": "replace"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let cells = grid_cells(&mut h);
+    let start = cells[6].1;
+    let path: Vec<_> = (0..=10).map(|i| start - egui::vec2(0.0, 30.0 * i as f32)).collect();
+    touch_path(&mut h, &path, 0);
+    assert!(selected(&h).is_empty(), "scrolling selects nothing: {:?}", selected(&h));
+    let moved = grid_cells(&mut h).into_iter().find(|(id, _)| *id == cells[6].0).map(|(_, p)| p);
+    assert!(moved.is_none_or(|p| p.y < start.y - 50.0), "the grid scrolled: {moved:?} from {start:?}");
 }
