@@ -35,8 +35,8 @@ use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_men
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    let t = Tokens::get(ui.ctx());
+/// The photo's develop settings as the sliders show them, and whether it develops from raw data.
+pub(crate) fn shown_settings(app: &LightcraftApp, id: PhotoId) -> (std::sync::Arc<DevelopSettings>, bool) {
     let d = app.session.develop_of(id).unwrap_or_default();
     // a raw shown from its embedded JPEG (preview only) gets the rendered-file white balance scale
     let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb());
@@ -55,6 +55,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         wb.temp = temp;
         wb.tint = tint;
     }
+    (d, raw)
+}
+
+pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let t = Tokens::get(ui.ctx());
+    let (d, raw) = shown_settings(app, id);
     let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
 
     if app.ui.soft_proof {
@@ -151,225 +157,250 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     divider(ui);
 
-    section(app, ui, &d, "light", "Light", |app, ui, d| {
-        hdr_row(app, ui, d);
-        for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
-            control(app, ui, d, c, true);
-        }
-        ui.add_space(6.0);
-        if d.hdr.enabled {
-            let open = app.ui.flyout_open("sdrRendition");
-            if flyout_row(ui, "sdrRendition", "SDR Rendition", Icon::Sliders, open).clicked() {
-                app.ui.toggle_flyout("sdrRendition");
-            }
-            if open {
-                for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrClarity"] {
-                    control(app, ui, d, c, true);
-                }
-                ui.add_space(6.0);
-            }
-        }
-        let open = app.ui.flyout_open("curve");
-        if flyout_row(ui, "curve", crate::i18n::tr("Curve"), Icon::Curve, open).clicked() {
-            app.ui.toggle_flyout("curve");
-        }
-        if open {
-            curve_editor(app, ui, id, d);
-        }
-        ui.add_space(8.0);
-    });
-    section(app, ui, &d, "color", "Color", |app, ui, d| {
-        // White balance row
-        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
-                let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
-                egui::Popup::menu(&r).show(|ui| {
-                    for m in WbMode::ALL {
-                        if m == WbMode::Custom {
-                            continue;
-                        }
-                        if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
-                            let mode = serde_json::to_value(m).unwrap_or_default();
-                            let _ = app.run("develop.wb", json!({"mode": mode}));
-                        }
-                    }
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let active = app.ui.tool == "wbPicker";
-                    if crate::widgets::icon_button(
-                        ui,
-                        "wbPicker",
-                        Icon::Picker,
-                        vec2(28.0, 28.0),
-                        active,
-                        true,
-                        crate::i18n::tr("White Balance Selector (W)"),
-                    )
-                    .clicked()
-                    {
-                        if active {
-                            app.ui.tool.clear();
-                        } else if let Err(e) = app.run("tool.wbPicker", json!({})) {
-                            // the same as W: from Compare, Survey or the grid it opens the photo in Detail
-                            app.toast(ui.ctx(), e);
-                        }
-                    }
-                });
-            });
-        });
-        if raw {
-            control(app, ui, d, "wb.temp", true);
-            control(app, ui, d, "wb.tint", true);
-        } else {
-            let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
-            apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
-            let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
-            apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
-        }
-        control(app, ui, d, "color.vibrance", true);
-        control(app, ui, d, "color.saturation", true);
-        ui.add_space(6.0);
-        let open = app.ui.flyout_open("mixer");
-        if flyout_row(ui, "mixer", if crate::is_bw(d) { "B&W Mixer" } else { "Color Mixer" }, Icon::Radial, open).clicked() {
-            app.ui.toggle_flyout("mixer");
-        }
-        if open {
-            mixer(app, ui, d);
-        }
-        if !crate::is_bw(d) {
-            let open = app.ui.flyout_open("pointColor");
-            if flyout_row(ui, "pointColor", crate::i18n::tr("Point Color"), Icon::Picker, open).clicked() {
-                app.ui.toggle_flyout("pointColor");
-            }
-            if open {
-                point_color(app, ui, d);
-            }
-        }
-        let open = app.ui.flyout_open("grading");
-        if flyout_row(ui, "grading", crate::i18n::tr("Color Grading"), Icon::Presets, open).clicked() {
-            app.ui.toggle_flyout("grading");
-        }
-        if open {
-            grading(app, ui, d, id);
-        }
-        ui.add_space(8.0);
-    });
-    section(app, ui, &d, "effects", "Effects", |app, ui, d| {
-        for c in ["effects.texture", "effects.clarity", "effects.dehaze"] {
-            control(app, ui, d, c, true);
-        }
-        sub_title(ui, crate::i18n::tr("Vignette"));
-        {
-            use lightcraft_develop::VignetteStyle as V;
-            let styles = [
-                (V::HighlightPriority, "Highlight", "highlightPriority"),
-                (V::ColorPriority, "Color", "colorPriority"),
-                (V::PaintOverlay, "Paint", "paintOverlay"),
-            ];
-            let items: Vec<(&str, &str)> = styles.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = styles.iter().position(|(v, _, _)| *v == d.vignette.style);
-            let mut chosen = None;
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
-                chosen = crate::widgets::segmented(ui, "vignetteStyle", &items, active, 3);
-            });
-            if let Some(i) = chosen {
-                let _ = app.run(
-                    "develop.merge",
-                    serde_json::json!({"settings": {"vignette": {"style": serde_json::to_value(styles[i].0).unwrap_or_default()}}}),
-                );
-            }
-        }
-        for c in ["vignette.amount", "vignette.midpoint", "vignette.feather", "vignette.roundness", "vignette.highlights"] {
-            let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
-            control(app, ui, d, c, enabled);
-        }
-        sub_title(ui, crate::i18n::tr("Grain"));
-        for c in ["grain.amount", "grain.size", "grain.roughness"] {
-            control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
-        }
-        ui.add_space(8.0);
-    });
-    section(app, ui, &d, "detail", "Detail", |app, ui, d| {
-        for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
-            control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
-        }
-        // AI Denoise is its own tool, apart from the manual noise reduction sliders below it
-        sub_title(ui, crate::i18n::tr("AI Denoise"));
-        // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
-        let applicable = !matches!(app.session.denoise_photo_state(id), lightcraft_engine::denoise::PhotoState::NotApplicable);
-        let on = d.enhance.denoise_enabled();
-        super::denoise::detail_toggle(app, ui, id, on, applicable);
-        control(app, ui, d, "enhance.denoise", applicable && on);
-        super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
-        sub_title(ui, crate::i18n::tr("Noise Reduction"));
-        for c in ["detail.nrLuminance", "detail.nrDetail", "detail.nrContrast", "detail.nrColor", "detail.nrColorDetail", "detail.nrColorSmoothness"]
-        {
-            control(app, ui, d, c, true);
-        }
-        ui.add_space(8.0);
-    });
-    section(app, ui, &d, "optics", "Optics", |app, ui, d| {
-        let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
-        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
-            let mut ca = d.optics.remove_ca;
-            if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
-            }
-            let mut lp = d.optics.lens_profile;
-            if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
-            }
-            if lp && !has_lens {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
-                );
-            }
-        });
-        if d.optics.lens_profile {
-            for c in ["optics.profileDistortion", "optics.profileVignetting"] {
-                control(app, ui, d, c, has_lens);
-            }
-        }
-        sub_title(ui, crate::i18n::tr("Manual"));
-        for c in ["optics.distortion", "optics.vignetting"] {
-            control(app, ui, d, c, true);
-        }
-        control(app, ui, d, "optics.vignettingMidpoint", d.optics.vignetting != 0.0);
-        ui.add_space(6.0);
-        let open = app.ui.flyout_open("defringe");
-        if flyout_row(ui, "defringe", crate::i18n::tr("Defringe"), Icon::Picker, open).clicked() {
-            app.ui.toggle_flyout("defringe");
-        }
-        if open {
-            control(app, ui, d, "optics.defringePurple", true);
-            let on = d.optics.defringe_purple_amount > 0.0;
-            control(app, ui, d, "optics.defringePurpleHueLo", on);
-            control(app, ui, d, "optics.defringePurpleHueHi", on);
-            control(app, ui, d, "optics.defringeGreen", true);
-            let on = d.optics.defringe_green_amount > 0.0;
-            control(app, ui, d, "optics.defringeGreenHueLo", on);
-            control(app, ui, d, "optics.defringeGreenHueHi", on);
-            sub_title(ui, crate::i18n::tr("Lateral Chromatic Aberration"));
-            control(app, ui, d, "optics.caRed", true);
-            control(app, ui, d, "optics.caBlue", true);
-        }
-        ui.add_space(8.0);
-    });
+    section(app, ui, &d, "light", "Light", |app, ui, d| section_body(app, ui, d, id, raw, "light"));
+    section(app, ui, &d, "color", "Color", |app, ui, d| section_body(app, ui, d, id, raw, "color"));
+    section(app, ui, &d, "effects", "Effects", |app, ui, d| section_body(app, ui, d, id, raw, "effects"));
+    section(app, ui, &d, "detail", "Detail", |app, ui, d| section_body(app, ui, d, id, raw, "detail"));
+    section(app, ui, &d, "optics", "Optics", |app, ui, d| section_body(app, ui, d, id, raw, "optics"));
     // Lightroom Classic's Calibration panel (the cloud app hides it): last, like there.
-    section(app, ui, &d, "calibration", "Calibration", |app, ui, d| {
-        sub_title(ui, crate::i18n::tr("Shadows"));
-        control(app, ui, d, "calibration.shadowsTint", true);
-        for (title, k) in [("Red Primary", "red"), ("Green Primary", "green"), ("Blue Primary", "blue")] {
-            sub_title(ui, title);
-            control(app, ui, d, &format!("calibration.{k}Hue"), true);
-            control(app, ui, d, &format!("calibration.{k}Sat"), true);
-        }
-        ui.add_space(8.0);
-    });
+    section(app, ui, &d, "calibration", "Calibration", |app, ui, d| section_body(app, ui, d, id, raw, "calibration"));
     ui.add_space(40.0);
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
         let _ = app.run("develop.reset", json!({}));
     }
+}
+
+/// The controls of one Edit section (`light`, `color`, `effects`, `detail`, `optics`, `calibration`),
+/// without its header: the desktop panel draws them under a fold, the phone layout's tool sheet on their own.
+/// `raw`: the photo develops from raw data (Kelvin white balance) rather than a rendered file.
+pub(crate) fn section_body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, raw: bool, key: &str) {
+    match key {
+        "light" => light_section(app, ui, d, id, raw),
+        "color" => color_section(app, ui, d, id, raw),
+        "effects" => effects_section(app, ui, d, id, raw),
+        "detail" => detail_section(app, ui, d, id, raw),
+        "optics" => optics_section(app, ui, d, id, raw),
+        "calibration" => calibration_section(app, ui, d, id, raw),
+        _ => {}
+    }
+}
+
+fn light_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
+    hdr_row(app, ui, d);
+    for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
+        control(app, ui, d, c, true);
+    }
+    ui.add_space(6.0);
+    if d.hdr.enabled {
+        let open = app.ui.flyout_open("sdrRendition");
+        if flyout_row(ui, "sdrRendition", "SDR Rendition", Icon::Sliders, open).clicked() {
+            app.ui.toggle_flyout("sdrRendition");
+        }
+        if open {
+            for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrClarity"] {
+                control(app, ui, d, c, true);
+            }
+            ui.add_space(6.0);
+        }
+    }
+    let open = app.ui.flyout_open("curve");
+    if flyout_row(ui, "curve", crate::i18n::tr("Curve"), Icon::Curve, open).clicked() {
+        app.ui.toggle_flyout("curve");
+    }
+    if open {
+        curve_editor(app, ui, id, d);
+    }
+    ui.add_space(8.0);
+}
+
+fn color_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, raw: bool) {
+    let t = Tokens::get(ui.ctx());
+    // White balance row
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
+            let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
+            egui::Popup::menu(&r).show(|ui| {
+                for m in WbMode::ALL {
+                    if m == WbMode::Custom {
+                        continue;
+                    }
+                    if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
+                        let mode = serde_json::to_value(m).unwrap_or_default();
+                        let _ = app.run("develop.wb", json!({"mode": mode}));
+                    }
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let active = app.ui.tool == "wbPicker";
+                if crate::widgets::icon_button(
+                    ui,
+                    "wbPicker",
+                    Icon::Picker,
+                    vec2(28.0, 28.0),
+                    active,
+                    true,
+                    crate::i18n::tr("White Balance Selector (W)"),
+                )
+                .clicked()
+                {
+                    if active {
+                        app.ui.tool.clear();
+                    } else if let Err(e) = app.run("tool.wbPicker", json!({})) {
+                        // the same as W: from Compare, Survey or the grid it opens the photo in Detail
+                        app.toast(ui.ctx(), e);
+                    }
+                }
+            });
+        });
+    });
+    if raw {
+        control(app, ui, d, "wb.temp", true);
+        control(app, ui, d, "wb.tint", true);
+    } else {
+        let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
+        apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
+        let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
+        apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
+    }
+    control(app, ui, d, "color.vibrance", true);
+    control(app, ui, d, "color.saturation", true);
+    ui.add_space(6.0);
+    let open = app.ui.flyout_open("mixer");
+    if flyout_row(ui, "mixer", if crate::is_bw(d) { "B&W Mixer" } else { "Color Mixer" }, Icon::Radial, open).clicked() {
+        app.ui.toggle_flyout("mixer");
+    }
+    if open {
+        mixer(app, ui, d);
+    }
+    if !crate::is_bw(d) {
+        let open = app.ui.flyout_open("pointColor");
+        if flyout_row(ui, "pointColor", crate::i18n::tr("Point Color"), Icon::Picker, open).clicked() {
+            app.ui.toggle_flyout("pointColor");
+        }
+        if open {
+            point_color(app, ui, d);
+        }
+    }
+    let open = app.ui.flyout_open("grading");
+    if flyout_row(ui, "grading", crate::i18n::tr("Color Grading"), Icon::Presets, open).clicked() {
+        app.ui.toggle_flyout("grading");
+    }
+    if open {
+        grading(app, ui, d, id);
+    }
+    ui.add_space(8.0);
+}
+
+fn effects_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, _id: PhotoId, _raw: bool) {
+    for c in ["effects.texture", "effects.clarity", "effects.dehaze"] {
+        control(app, ui, d, c, true);
+    }
+    sub_title(ui, crate::i18n::tr("Vignette"));
+    {
+        use lightcraft_develop::VignetteStyle as V;
+        let styles = [
+            (V::HighlightPriority, "Highlight", "highlightPriority"),
+            (V::ColorPriority, "Color", "colorPriority"),
+            (V::PaintOverlay, "Paint", "paintOverlay"),
+        ];
+        let items: Vec<(&str, &str)> = styles.iter().map(|(_, l, k)| (*l, *k)).collect();
+        let active = styles.iter().position(|(v, _, _)| *v == d.vignette.style);
+        let mut chosen = None;
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
+            chosen = crate::widgets::segmented(ui, "vignetteStyle", &items, active, 3);
+        });
+        if let Some(i) = chosen {
+            let _ = app.run(
+                "develop.merge",
+                serde_json::json!({"settings": {"vignette": {"style": serde_json::to_value(styles[i].0).unwrap_or_default()}}}),
+            );
+        }
+    }
+    for c in ["vignette.amount", "vignette.midpoint", "vignette.feather", "vignette.roundness", "vignette.highlights"] {
+        let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
+        control(app, ui, d, c, enabled);
+    }
+    sub_title(ui, crate::i18n::tr("Grain"));
+    for c in ["grain.amount", "grain.size", "grain.roughness"] {
+        control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+    }
+    ui.add_space(8.0);
+}
+
+fn detail_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
+    for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
+        control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
+    }
+    // AI Denoise is its own tool, apart from the manual noise reduction sliders below it
+    sub_title(ui, crate::i18n::tr("AI Denoise"));
+    // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
+    let applicable = !matches!(app.session.denoise_photo_state(id), lightcraft_engine::denoise::PhotoState::NotApplicable);
+    let on = d.enhance.denoise_enabled();
+    super::denoise::detail_toggle(app, ui, id, on, applicable);
+    control(app, ui, d, "enhance.denoise", applicable && on);
+    super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
+    sub_title(ui, crate::i18n::tr("Noise Reduction"));
+    for c in ["detail.nrLuminance", "detail.nrDetail", "detail.nrContrast", "detail.nrColor", "detail.nrColorDetail", "detail.nrColorSmoothness"] {
+        control(app, ui, d, c, true);
+    }
+    ui.add_space(8.0);
+}
+
+fn optics_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
+    let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
+        let mut ca = d.optics.remove_ca;
+        if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
+            let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
+        }
+        let mut lp = d.optics.lens_profile;
+        if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
+            let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
+        }
+        if lp && !has_lens {
+            ui.label(egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+        }
+    });
+    if d.optics.lens_profile {
+        for c in ["optics.profileDistortion", "optics.profileVignetting"] {
+            control(app, ui, d, c, has_lens);
+        }
+    }
+    sub_title(ui, crate::i18n::tr("Manual"));
+    for c in ["optics.distortion", "optics.vignetting"] {
+        control(app, ui, d, c, true);
+    }
+    control(app, ui, d, "optics.vignettingMidpoint", d.optics.vignetting != 0.0);
+    ui.add_space(6.0);
+    let open = app.ui.flyout_open("defringe");
+    if flyout_row(ui, "defringe", crate::i18n::tr("Defringe"), Icon::Picker, open).clicked() {
+        app.ui.toggle_flyout("defringe");
+    }
+    if open {
+        control(app, ui, d, "optics.defringePurple", true);
+        let on = d.optics.defringe_purple_amount > 0.0;
+        control(app, ui, d, "optics.defringePurpleHueLo", on);
+        control(app, ui, d, "optics.defringePurpleHueHi", on);
+        control(app, ui, d, "optics.defringeGreen", true);
+        let on = d.optics.defringe_green_amount > 0.0;
+        control(app, ui, d, "optics.defringeGreenHueLo", on);
+        control(app, ui, d, "optics.defringeGreenHueHi", on);
+        sub_title(ui, crate::i18n::tr("Lateral Chromatic Aberration"));
+        control(app, ui, d, "optics.caRed", true);
+        control(app, ui, d, "optics.caBlue", true);
+    }
+    ui.add_space(8.0);
+}
+
+fn calibration_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, _id: PhotoId, _raw: bool) {
+    sub_title(ui, crate::i18n::tr("Shadows"));
+    control(app, ui, d, "calibration.shadowsTint", true);
+    for (title, k) in [("Red Primary", "red"), ("Green Primary", "green"), ("Blue Primary", "blue")] {
+        sub_title(ui, title);
+        control(app, ui, d, &format!("calibration.{k}Hue"), true);
+        control(app, ui, d, &format!("calibration.{k}Sat"), true);
+    }
+    ui.add_space(8.0);
 }

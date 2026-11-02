@@ -1111,6 +1111,26 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     ui.cursor().left() - start
 }
 
+/// Every menu of the bar as submenus of the menu `ui` is drawing (the phone layout's "All Menus"):
+/// the same items, and the same handling of a picked one, as [`show_in_window`]. `bar_bottom`: where
+/// the bar ends, which the submenus hang below.
+pub fn menus_in(app: &mut LightcraftApp, ui: &mut egui::Ui, bar_bottom: Option<f32>) {
+    let bar = menu_bar(app);
+    let mac = matches!(ui.ctx().os(), egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS);
+    let mut clicked: Option<(String, Value)> = None;
+    for (title, items) in &bar {
+        submenu(ui, title, crate::i18n::tr(title).to_string(), 2, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 3, bar_bottom));
+    }
+    if let Some((id, params)) = clicked {
+        let r = run_item(app, &id, params);
+        if let Err(e) = r
+            && matches!(id.as_str(), "app.export" | "app.exportPrevious" | "file.backupLibrary" | "file.restoreLibrary")
+        {
+            app.toast(ui.ctx(), e);
+        }
+    }
+}
+
 /// Native menu-bar behaviour for the top-level titles: while one menu is open, resting the pointer
 /// on another title closes it and opens that one, and a click on another title opens it in that
 /// same click (instead of only closing the open menu as a click outside). Without an open menu

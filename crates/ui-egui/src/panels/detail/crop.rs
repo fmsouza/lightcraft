@@ -180,7 +180,11 @@ pub(super) fn crop_overlay(
             Some(Gesture::CropRotate { start_angle, a0 }) => {
                 let c = map.screen(Point::new(0.5, 0.5));
                 let a = (q - c).angle();
-                let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
+                // by finger the photo turns the way the finger goes round, like turning the print
+                // itself; a mouse keeps the desktop's direction
+                let turned = (a - a0).to_degrees() as f64;
+                let turned = if crate::widgets::finger(ui.ctx()) { -turned } else { turned };
+                let ang = (start_angle + turned).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
                 let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
             }

@@ -62,10 +62,15 @@ fn phone_width_puts_the_editor_in_a_sheet_under_the_photo() {
     h.step();
     assert!(widget(&h, "panel:sheet").is_none());
     assert!(h.app.canvas_rect.is_some_and(|c| c.height() > canvas.height() + 150.0));
-    // the bottom bar's Edit button brings it back on the Edit panel
-    click(&mut h, "icon:edit");
+    // a section in the tool row brings it back on the Edit panel, that section alone
+    click(&mut h, "icon:light");
     assert_eq!(h.app.ui.right, RightPanel::Edit);
     assert!(widget(&h, "panel:sheet").is_some());
+    assert!(widget(&h, "slider:light.exposure").is_some(), "Light's sliders");
+    assert!(widget(&h, "slider:color.saturation").is_none(), "only Light's");
+    // pressed again, it puts the sheet away
+    click(&mut h, "icon:light");
+    assert_eq!(h.app.ui.right, RightPanel::None);
 }
 
 #[test]
@@ -303,8 +308,8 @@ fn keyboard_lifts_the_layout_and_keeps_a_sheet_field_in_view() {
     keyboard_up(&mut h);
     let content = h.view.ctx.content_rect();
     assert_eq!(content.bottom(), PHONE[1] - KEYBOARD, "the content area ends at the keyboard");
-    let bar = widget(&h, "icon:photoGrid").expect("the bottom bar");
-    assert!(bar.bottom() <= content.bottom(), "the bottom bar sits on the keyboard: {bar:?}");
+    let bar = widget(&h, "panel:tools").expect("the editor's tool row");
+    assert!(bar.bottom() <= content.bottom() + 0.5, "the tool row sits on the keyboard: {bar:?}");
     let now = widget(&h, &field).expect("the field");
     assert!(
         now.bottom() <= content.bottom() && now.top() >= h.app.canvas_rect.map_or(0.0, |c| c.bottom()),
@@ -505,4 +510,29 @@ fn phone_touch_screen_gets_finger_sized_controls() {
         h.step();
     }
     assert_eq!(h.view.ctx.global_style().spacing.interact_size.y, mouse);
+}
+
+#[test]
+fn phone_more_menu_offers_what_the_screen_needs() {
+    // the editor: the photo's settings, and Reset Edits works from there
+    let mut h = demo(PHONE, json!({"view": "detail"}));
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!((exposure(&h) - 1.0).abs() < 1e-9);
+    click(&mut h, "icon:more");
+    for id in ["more:develop.copy", "more:develop.paste", "more:photo.delete", "more:allMenus"] {
+        assert!(widget(&h, id).is_some(), "{id} in the editor's menu");
+    }
+    assert!(widget(&h, "more:file.addFolder").is_none(), "no library items in the editor");
+    assert!(widget(&h, "menu:all").is_none() && widget(&h, "menu:File").is_none(), "no desktop menu bar");
+    click(&mut h, "more:develop.reset");
+    assert!(exposure(&h).abs() < 1e-9, "Reset Edits reset the exposure");
+    // the library: importing and the app
+    let mut h = demo(PHONE, json!({"view": "photoGrid"}));
+    click(&mut h, "icon:more");
+    for id in ["more:file.addFolder", "more:library.selectAll", "more:app.settings", "more:allMenus"] {
+        assert!(widget(&h, id).is_some(), "{id} in the library's menu");
+    }
+    assert!(widget(&h, "more:develop.copy").is_none(), "no editor items in the library");
 }
