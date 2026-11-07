@@ -180,6 +180,8 @@ png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
+# For now the egui family comes from Iito/egui: storytold/egui 6d518fc plus one commit, the iOS
+# surface-size fix (also emilk/egui#8840). Point it back at storytold/egui once that has the fix.
 [patch.crates-io]
 ecolor = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
 emath = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
