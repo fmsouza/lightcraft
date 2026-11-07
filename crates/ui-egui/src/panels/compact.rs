@@ -320,14 +320,32 @@ fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if undo_button(right, "undo", "Undo", false).clicked() {
                 let _ = app.run("edit.undo", json!({}));
             }
-            let held = icon_button(right, "showOriginal", Icon::BeforeAfter, BUTTON, false, true, "Show Original (hold)").is_pointer_button_down_on();
-            let showing = app.ui.before_after == crate::state::BeforeAfter::Original;
-            if held != showing {
-                app.ui.before_after = if held { crate::state::BeforeAfter::Original } else { crate::state::BeforeAfter::Off };
-            }
+            let r = icon_button(right, "showOriginal", Icon::BeforeAfter, BUTTON, false, true, "Show Original (hold)");
+            hold_original(app, &r);
             unsaved_indicator(app, right);
         });
     });
+}
+
+/// Show Original held down: the press shows the photo as shot, and the release brings back the
+/// view it replaced. Only the press and release change the view, so View > Show Original and the
+/// Before / After layouts work as usual otherwise. The hold is followed until the pointer lifts,
+/// not by the button's response: egui turns a finger held past `max_click_duration` into a long
+/// press and the button then no longer reports the pointer as down on it.
+fn hold_original(app: &mut LightcraftApp, r: &egui::Response) {
+    let key = egui::Id::unique("compact-hold-original");
+    let was: Option<crate::state::BeforeAfter> = r.ctx.data(|d| d.get_temp(key));
+    match was {
+        None if r.is_pointer_button_down_on() => {
+            r.ctx.data_mut(|d| d.insert_temp(key, app.ui.before_after));
+            app.ui.before_after = crate::state::BeforeAfter::Original;
+        }
+        Some(before) if !r.ctx.input(|i| i.pointer.any_down() || i.any_touches()) => {
+            r.ctx.data_mut(|d| d.remove::<crate::state::BeforeAfter>(key));
+            app.ui.before_after = before;
+        }
+        _ => {}
+    }
 }
 
 /// Undo (a hooked arrow turning back to the left) or Redo (the same, mirrored).
@@ -628,6 +646,11 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let title = TABS.iter().find(|(.., tab)| tab_on(app, &ctx, *tab)).map_or("Edit", |(_, label, ..)| *label);
+    // one Edit section: its eye (on / off), as on the section's header in the full panel
+    let eye = section(&ctx)
+        .filter(|_| app.ui.right == RightPanel::Edit && !app.ui.presets)
+        .zip(app.session.active())
+        .map(|(key, id)| (key, super::edit::shown_settings(app, id).0.section_enabled(key)));
     egui::Panel::top("compact_sheet_head")
         .exact_size(36.0)
         .resizable(false)
@@ -638,6 +661,9 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if icon_button(ui, "sheetClose", Icon::ChevronDown, vec2(36.0, 36.0), false, true, "Hide").clicked() {
                         close_sheet(app);
+                    }
+                    if let Some((key, on)) = eye {
+                        section_eye(app, ui, key, on);
                     }
                 });
             });
@@ -654,6 +680,7 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().id_salt("compact-section").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_space(6.0);
+                super::edit::notices(app, ui, id);
                 let (d, raw) = super::edit::shown_settings(app, id);
                 super::edit::section_body(app, ui, &d, id, raw, key);
                 ui.add_space(24.0);
@@ -664,6 +691,21 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             register(ui, "panel:right_panel", ui.available_rect_before_wrap());
             super::right::show(app, ui);
         }
+    }
+}
+
+/// The sheet's eye for its Edit section: off, the section contributes nothing to the photo.
+fn section_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, on: bool) {
+    let t = Tokens::get(ui.ctx());
+    let tip = if on { "Hide this section's edits" } else { "Show this section's edits" };
+    let r = icon_button(ui, "sheetEye", Icon::Eye, vec2(36.0, 36.0), false, true, tip);
+    crate::widgets::announce_selected(&r, crate::i18n::tr("Show / hide"), on);
+    if !on {
+        let e = Rect::from_center_size(r.rect.center(), vec2(18.0, 18.0));
+        ui.painter().line_segment([e.left_bottom(), e.right_top()], Stroke::new(1.5, t.text_disabled));
+    }
+    if r.clicked() {
+        let _ = app.run("develop.sectionEnabled", json!({"section": key, "enabled": !on}));
     }
 }
 

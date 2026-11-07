@@ -85,31 +85,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         reset_clicked = clicks.reset;
     });
-    if let Some(why) = &preview_only {
-        let reload = egui::Frame::NONE
-            .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 12 })
-            .show(ui, |ui| crate::widgets::preview_only_notice(ui, "edit", why))
-            .inner;
-        if reload {
-            reload_preview_only(app, ui.ctx(), id);
-        }
-    }
+    preview_only_banner(app, ui, id, preview_only.as_deref());
     let n = app.session.selection.ids.len();
     if n > 1 && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
         quick_develop(app, ui, n);
     }
-    if app.session.auto_sync && n > 1 {
-        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
-                        let _ = app.run("develop.autoSync", json!({"on": false}));
-                    }
-                });
-            });
-        });
-    }
+    auto_sync_banner(app, ui);
     divider(ui);
     // profile row
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 14, bottom: 14 }).show(ui, |ui| {
@@ -169,6 +150,49 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if reset_clicked {
         let _ = app.run("develop.reset", json!({}));
     }
+}
+
+/// What the Edit panel shows above its sections because it changes what editing does: soft
+/// proofing, the Preview-only notice (with Reload) and the Auto Sync banner. The phone layout's
+/// one-section sheets draw them above the section's controls as well.
+pub(crate) fn notices(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    if app.ui.soft_proof {
+        soft_proofing(app, ui, id);
+    }
+    let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
+    preview_only_banner(app, ui, id, preview_only.as_deref());
+    auto_sync_banner(app, ui);
+}
+
+/// A raw shown from its embedded JPEG: the notice, and Reload.
+fn preview_only_banner(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, why: Option<&str>) {
+    let Some(why) = why else { return };
+    let reload = egui::Frame::NONE
+        .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 12 })
+        .show(ui, |ui| crate::widgets::preview_only_notice(ui, "edit", why))
+        .inner;
+    if reload {
+        reload_preview_only(app, ui.ctx(), id);
+    }
+}
+
+/// Auto Sync on with several photos selected: edits apply to all of them, and Turn Off.
+fn auto_sync_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let n = app.session.selection.ids.len();
+    if !(app.session.auto_sync && n > 1) {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
+                    let _ = app.run("develop.autoSync", json!({"on": false}));
+                }
+            });
+        });
+    });
 }
 
 /// The controls of one Edit section (`light`, `color`, `effects`, `detail`, `optics`, `calibration`),

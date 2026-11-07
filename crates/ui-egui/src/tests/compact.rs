@@ -791,3 +791,57 @@ fn phone_full_layout_touch_keeps_the_desktop_grid() {
     assert_eq!(selected(&h), vec![other], "it selects it");
     assert_ne!(id, other);
 }
+
+/// A finger held on `at` for `frames` frames; `during` runs while it is still down.
+fn hold(h: &mut Headless, at: egui::Pos2, frames: usize, during: impl FnOnce(&Headless)) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.input([finger(1, egui::TouchPhase::Start, at), egui::Event::PointerMoved(at), button(at, true)]);
+    for _ in 0..frames {
+        h.step();
+    }
+    during(h);
+    h.input([finger(1, egui::TouchPhase::End, at), button(at, false), egui::Event::PointerGone]);
+    h.step();
+    h.step();
+}
+
+#[test]
+fn phone_show_original_lasts_as_long_as_the_finger() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    touch_screen(&mut h);
+    let at = widget(&h, "icon:showOriginal").expect("Show Original").center();
+    // well past egui's long press (0.8 s)
+    hold(&mut h, at, 90, |h| assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::Original, "the original while held"));
+    assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::Off, "the edit once let go");
+    // View > Show Original (or a Before / After layout) isn't undone by the button
+    h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::SideBySide);
+    let at = widget(&h, "icon:showOriginal").expect("Show Original").center();
+    hold(&mut h, at, 10, |h| assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::Original));
+    assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::SideBySide, "a hold ends on the view it started from");
+}
+
+#[test]
+fn phone_section_sheet_has_the_eye_and_the_auto_sync_banner() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    touch_screen(&mut h);
+    click(&mut h, "icon:light");
+    let id = h.app.session.active().expect("a photo");
+    let enabled = |h: &Headless| h.app.session.catalog.photo(id).expect("photo").develop.section_enabled("light");
+    assert!(widget(&h, "icon:sheetEye").is_some(), "the section's eye");
+    click(&mut h, "icon:sheetEye");
+    assert!(!enabled(&h), "the eye turns the section off");
+    click(&mut h, "icon:sheetEye");
+    assert!(enabled(&h), "and on again");
+    // Auto Sync with two photos chosen: the banner says edits go to both
+    let other = h.app.session.visible_shared().1.iter().copied().find(|p| *p != id).expect("another photo");
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0, other.0], "active": id.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.run("develop.autoSync", json!({"on": true})).expect("auto sync")["on"], true);
+    h.step();
+    h.step();
+    assert!(widget(&h, "button:autoSyncOff").is_some(), "the Auto Sync banner in the sheet");
+}
