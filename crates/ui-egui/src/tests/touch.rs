@@ -527,7 +527,7 @@ fn wait(h: &mut Headless, secs: f64) {
 /// points apart and tap slower than a mouse double-clicks: the second tap counts when it lands on
 /// the same photo soon enough, wherever on it.
 #[test]
-fn a_tap_on_a_grid_photo_opens_it() {
+fn a_double_tap_on_a_grid_photo_opens_it() {
     let services = Services { png: None, ..Default::default() };
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     app.ui.view = crate::state::ViewMode::PhotoGrid;
@@ -543,10 +543,18 @@ fn a_tap_on_a_grid_photo_opens_it() {
     let (id, r) =
         h.app.widgets.iter().find(|(w, r)| w.starts_with("thumb:") && r.top() > 120.0 && r.bottom() < 700.0).cloned().expect("a photo on screen");
     let id: u64 = id.trim_start_matches("thumb:").parse().unwrap();
-    // one tap opens it, as in a phone's or a tablet's photo library
+    // too slow: two single taps
     tap(&mut h, r.center());
+    wait(&mut h, 0.8);
+    tap(&mut h, r.center());
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid, "two slow taps only select");
+    assert_eq!(h.app.session.active().map(|p| p.0), Some(id));
+    wait(&mut h, 0.8);
+    tap(&mut h, r.center());
+    wait(&mut h, 0.2);
+    tap(&mut h, r.center() + egui::vec2(12.0, -8.0));
     h.step();
-    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail, "a tap opens the photo");
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail, "the second tap opens it");
     assert_eq!(h.app.session.active().map(|p| p.0), Some(id));
 }
 

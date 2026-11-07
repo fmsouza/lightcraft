@@ -405,7 +405,9 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let active = app.session.selection.active;
     // bring the active photo into view when it changes (keyboard, click, command) or the grid
     // comes back on screen; otherwise the scroll position is the user's
-    let scroll_to: Option<Rect> = if follow_active(ui.ctx(), egui::Id::unique("grid-follow-active"), active, app.session.source) {
+    // (not while a finger slides a selection: the grid stays where the finger is)
+    let follow = follow_active(ui.ctx(), egui::Id::unique("grid-follow-active"), active, app.session.source);
+    let scroll_to: Option<Rect> = if follow && !slide_selecting(ui.ctx()) {
         active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied())
     } else {
         None
@@ -1033,8 +1035,8 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         }
         return;
     }
-    let finger = crate::widgets::finger(ui.ctx());
-    if finger && touch_cell(app, ui, resp, id) {
+    let phone = phone_touch(ui.ctx());
+    if phone && touch_cell(app, resp, id) {
         return;
     }
     if resp.clicked() {
@@ -1057,18 +1059,25 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     if resp.drag_started_by(egui::PointerButton::Primary) {
         begin_photo_drag(app, id);
     }
-    // by finger a long press starts Select mode instead (`touch_cell`); a menu a mouse or
+    // on a phone a long press starts Select mode instead (`touch_cell`); a menu a mouse or
     // trackpad opened stays up while a finger uses it
-    if !finger || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(resp)) {
+    if !phone || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(resp)) {
         crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
     }
+}
+
+/// The phone layout's grid by finger (a tablet or touch laptop in the full layout keeps the
+/// desktop's taps and the long-press menu).
+fn phone_touch(ctx: &egui::Context) -> bool {
+    crate::widgets::finger(ctx) && super::compact::is_compact(ctx)
 }
 
 /// A finger on a cell, as in a phone's photo library: a tap opens the photo (in Select mode it
 /// takes the photo in or out of the selection), a long press starts Select mode with the photo
 /// selected. True when the cell's response was handled here.
-fn touch_cell(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, id: PhotoId) -> bool {
-    let held = egui::Id::unique("grid-long-pressed");
+fn touch_cell(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) -> bool {
+    // the release that ends a long press is not a click (egui drops the potential click once the
+    // touch is long), so it needs no guard
     if resp.long_touched() {
         if !app.ui.select_mode {
             let _ = app.run("view.selectMode", json!({"on": true}));
@@ -1076,14 +1085,9 @@ fn touch_cell(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, id:
         } else if !app.session.selection.contains(id) {
             let _ = app.run("library.select", json!({"ids": [id.0], "mode": "add"}));
         }
-        // the release that ends the press is not a tap as well
-        ui.ctx().data_mut(|d| d.insert_temp(held, id.0));
         return true;
     }
     if resp.clicked() {
-        if ui.ctx().data_mut(|d| d.remove_temp::<u64>(held)) == Some(id.0) {
-            return true;
-        }
         if app.ui.select_mode {
             let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
         } else {
@@ -1102,9 +1106,14 @@ fn touch_cell(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, id:
 #[derive(Clone)]
 enum Slide {
     /// The finger went down on photo `index` at `origin`; which way it goes isn't known yet.
+    /// `remove`: the photo was selected when the finger went down, so a slide from it takes
+    /// photos out. Read at the press, not when the slide starts: a long press selects the photo
+    /// first, and the slide that follows it adds. A press that began before Select mode was on
+    /// (the long press that turned it on) always adds.
     Pressed {
         origin: Pos2,
         index: usize,
+        remove: bool,
     },
     /// Scrolling (or pressed between photos): nothing to select until the finger lifts.
     Scrolling,
@@ -1115,8 +1124,8 @@ enum Slide {
 struct SlideSelect {
     /// The photo the slide started on.
     anchor: usize,
-    /// The selection when it started.
-    base: std::sync::Arc<Vec<PhotoId>>,
+    /// The selection when it started, in order, and as a set.
+    base: std::sync::Arc<(Vec<PhotoId>, HashSet<PhotoId>)>,
     /// Started on a selected photo: the slide takes photos out.
     remove: bool,
     /// The photo under the finger when the selection was last set.
@@ -1141,43 +1150,39 @@ const SLIDE_EDGE: f32 = 56.0;
 /// content, which starts at `origin`; `edges` is the grid on screen.
 fn slide_select(app: &mut LightcraftApp, ui: &egui::Ui, ids: &[PhotoId], cells: &[Rect], origin: Pos2, edges: Rect) {
     let ctx = ui.ctx().clone();
-    let on = crate::widgets::finger(&ctx) && app.ui.select_mode && app.ui.keyword_painter.is_none();
+    let on = phone_touch(&ctx) && app.ui.select_mode && app.ui.keyword_painter.is_none();
     let (pressed, down, pos) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos()));
     let (true, true, Some(pos)) = (on, down || pressed, pos) else {
         ctx.data_mut(|d| d.remove::<Slide>(slide_id()));
         return;
     };
-    let index_at = |p: Pos2| {
-        let q = p - origin.to_vec2();
-        cells.iter().position(|c| c.contains(q))
-    };
+    let index_at = |p: Pos2| cell_at(cells, p - origin.to_vec2());
     let mut slide = ctx.data(|d| d.get_temp::<Slide>(slide_id()));
     if pressed || slide.is_none() {
-        slide = Some(match index_at(pos).filter(|_| edges.contains(pos)) {
-            Some(index) => Slide::Pressed { origin: pos, index },
+        // only a press on the grid itself: not one on a dialog, menu or popup drawn above it
+        let on_grid = edges.contains(pos) && ctx.layer_id_at(pos) == Some(ui.layer_id());
+        slide = Some(match index_at(pos).filter(|_| on_grid) {
+            Some(index) => {
+                let remove = pressed && ids.get(index).is_some_and(|id| app.session.selection.contains(*id));
+                Slide::Pressed { origin: pos, index, remove }
+            }
             None => Slide::Scrolling,
         });
     }
     let slide = match slide {
-        Some(Slide::Pressed { origin: from, index }) => {
+        Some(Slide::Pressed { origin: from, index, remove }) => {
             let d = pos - from;
             if d.length() < SLIDE_START {
-                Slide::Pressed { origin: from, index }
+                Slide::Pressed { origin: from, index, remove }
             } else if d.x.abs() > d.y.abs() {
-                let base: Vec<PhotoId> = app.session.selection.ids.clone();
-                let remove = ids.get(index).is_some_and(|id| base.contains(id));
-                Slide::Selecting(SlideSelect { anchor: index, base: std::sync::Arc::new(base), remove, last: None })
+                let order: Vec<PhotoId> = app.session.selection.ids.clone();
+                let set: HashSet<PhotoId> = order.iter().copied().collect();
+                Slide::Selecting(SlideSelect { anchor: index, base: std::sync::Arc::new((order, set)), remove, last: None })
             } else {
                 Slide::Scrolling
             }
         }
-        Some(Slide::Selecting(mut s)) => {
-            if let Some(i) = index_at(pos)
-                && s.last != Some(i)
-            {
-                select_range(app, ids, &s, i);
-                s.last = Some(i);
-            }
+        Some(Slide::Selecting(s)) => {
             let step = if pos.y < edges.top() + SLIDE_EDGE {
                 12.0
             } else if pos.y > edges.bottom() - SLIDE_EDGE {
@@ -1186,35 +1191,55 @@ fn slide_select(app: &mut LightcraftApp, ui: &egui::Ui, ids: &[PhotoId], cells: 
                 0.0
             };
             if step != 0.0 {
+                // the grid moves under the finger; the photo under it is read again next frame
                 ui.scroll_with_delta_animation(vec2(0.0, step), egui::style::ScrollAnimation::none());
-                // the photo under the finger changes as the grid moves under it
-                s.last = None;
                 ctx.request_repaint();
             }
             Slide::Selecting(s)
         }
         _ => Slide::Scrolling,
     };
-    if let Slide::Selecting(s) = &slide
-        && s.last.is_none()
-        && let Some(i) = index_at(pos)
-    {
-        select_range(app, ids, s, i);
-    }
+    let slide = match slide {
+        // the selection changes only when the photo under the finger does
+        Slide::Selecting(mut s) => {
+            if let Some(i) = index_at(pos)
+                && s.last != Some(i)
+            {
+                select_range(app, ids, &s, i);
+                s.last = Some(i);
+            }
+            Slide::Selecting(s)
+        }
+        other => other,
+    };
     ctx.data_mut(|d| d.insert_temp(slide_id(), slide));
 }
 
+/// The cell under `p` (in the grid's content). Cells are in reading order, so their bottoms only
+/// grow: the search starts at the first row that reaches `p` and stops past it.
+fn cell_at(cells: &[Rect], p: Pos2) -> Option<usize> {
+    let start = cells.partition_point(|c| c.bottom() < p.y);
+    cells.get(start..)?.iter().take_while(|c| c.top() <= p.y).position(|c| c.contains(p)).map(|i| start + i)
+}
+
 /// The selection a slide from `s.anchor` to photo `to` gives: the photos between them (both
-/// included) added to, or taken out of, the selection it started from.
+/// included) added to, or taken out of, the selection it started from. The active photo stays
+/// the same while it is still selected, so the grid doesn't scroll to another one mid-slide.
 fn select_range(app: &mut LightcraftApp, ids: &[PhotoId], s: &SlideSelect, to: usize) {
     let (lo, hi) = (s.anchor.min(to), s.anchor.max(to));
     let Some(range) = ids.get(lo..=hi) else { return };
+    let (order, set) = &*s.base;
     let chosen: Vec<u64> = if s.remove {
-        s.base.iter().filter(|id| !range.contains(id)).map(|id| id.0).collect()
+        let range: HashSet<PhotoId> = range.iter().copied().collect();
+        order.iter().filter(|id| !range.contains(id)).map(|id| id.0).collect()
     } else {
-        s.base.iter().chain(range.iter().filter(|id| !s.base.contains(id))).map(|id| id.0).collect()
+        order.iter().chain(range.iter().filter(|id| !set.contains(id))).map(|id| id.0).collect()
     };
-    let _ = app.run("library.select", json!({"ids": chosen, "mode": "replace"}));
+    let mut params = json!({"ids": chosen, "mode": "replace"});
+    if let Some(a) = app.session.selection.active.filter(|a| chosen.contains(&a.0)) {
+        params["active"] = json!(a.0);
+    }
+    let _ = app.run("library.select", params);
 }
 
 struct ThumbFlags {
@@ -1899,5 +1924,24 @@ mod tests {
         assert_eq!(resolve_group(GroupBy::Auto, 90.0), GroupBy::Year);
         assert_eq!(resolve_group(GroupBy::None, 220.0), GroupBy::None);
         assert_eq!(resolve_group(GroupBy::Year, 400.0), GroupBy::Year);
+    }
+}
+
+#[cfg(test)]
+mod cell_at_tests {
+    use egui::{Rect, pos2, vec2};
+
+    use super::cell_at;
+
+    #[test]
+    fn finds_the_cell_under_a_point_in_reading_order() {
+        // three rows of four 10×10 cells with 2-point gaps
+        let cells: Vec<Rect> = (0..12).map(|i| Rect::from_min_size(pos2((i % 4) as f32 * 12.0, (i / 4) as f32 * 12.0), vec2(10.0, 10.0))).collect();
+        assert_eq!(cell_at(&cells, pos2(1.0, 1.0)), Some(0));
+        assert_eq!(cell_at(&cells, pos2(37.0, 13.0)), Some(7));
+        assert_eq!(cell_at(&cells, pos2(13.0, 29.0)), Some(9));
+        assert_eq!(cell_at(&cells, pos2(11.0, 5.0)), None, "a gap between cells");
+        assert_eq!(cell_at(&cells, pos2(5.0, 40.0)), None, "below the last row");
+        assert_eq!(cell_at(&[], pos2(0.0, 0.0)), None);
     }
 }

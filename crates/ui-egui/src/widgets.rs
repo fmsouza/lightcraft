@@ -293,7 +293,8 @@ pub fn finger(ctx: &egui::Context) -> bool {
 /// What a photo, album or keyword in a scrolling list senses: clicks and drags (drag and drop)
 /// with a mouse or trackpad, an iPad's included. With a finger clicks only: egui gives a drag to
 /// the widget under the finger, so a list item that took drags would never let a finger scroll its
-/// list. A long press opens the item's context menu there (egui counts it as a secondary click).
+/// list. A long press opens the item's context menu there (egui counts it as a secondary click),
+/// except on a photo in the phone layout's grid, where it starts Select mode.
 pub fn list_item_sense(ctx: &egui::Context) -> egui::Sense {
     if finger(ctx) { egui::Sense::click() } else { egui::Sense::click_and_drag() }
 }
