@@ -2,7 +2,8 @@
 //! share (each with a check box), then **Share** (a full-size JPEG, straight to the system share
 //! sheet), **Export as** (a short form: file type, size, quality, watermark; More options opens the
 //! full Export dialog) and **Save to Photos** (straight into the photo library; its gear sets what
-//! is saved). Opened by the Export buttons of [`super::compact`]'s bars.
+//! is saved) and **Add border** (a plain border round the photo, even or shaping the canvas to
+//! 1:1, 4:5 …, then Share). Opened by the Export buttons of [`super::compact`]'s bars.
 //!
 //! Every action is a background `app.export` of the chosen photos; [`Handoff`] says where its
 //! files go once written. The sheet's own exports leave Export with Previous (and the full dialog's
@@ -72,12 +73,67 @@ impl Form {
     }
 }
 
+/// Border colours: white, greys, black, and two warm tones.
+const BORDER_COLORS: &[[u8; 3]] =
+    &[[255, 255, 255], [214, 214, 214], [150, 150, 150], [90, 90, 90], [0, 0, 0], [24, 24, 24], [62, 48, 42], [238, 228, 210]];
+
+/// Border shapes: none, even on every side, or the canvas's width : height.
+const BORDER_SHAPES: &[(&str, Option<[u16; 2]>)] = &[
+    ("Original", None),
+    ("Even", None),
+    ("1:1", Some([1, 1])),
+    ("4:5", Some([4, 5])),
+    ("3:4", Some([3, 4])),
+    ("2:3", Some([2, 3])),
+    ("3:2", Some([3, 2])),
+    ("9:16", Some([9, 16])),
+    ("16:9", Some([16, 9])),
+];
+
+/// Thickness slider steps: 0..=25, a step being 1 % of the photo's long edge on each side.
+const BORDER_STEPS: u8 = 25;
+
+/// What Add border draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BorderForm {
+    pub color: [u8; 3],
+    /// 0..=[`BORDER_STEPS`]: per cent of the photo's long edge.
+    pub thickness: u8,
+    /// An index into [`BORDER_SHAPES`] (0: no border).
+    pub shape: usize,
+}
+
+impl Default for BorderForm {
+    fn default() -> Self {
+        Self { color: [255, 255, 255], thickness: 5, shape: 1 }
+    }
+}
+
+impl BorderForm {
+    /// The export's border, or none for Original.
+    pub fn border(&self) -> Option<lightcraft_engine::export::Border> {
+        let (_, ratio) = BORDER_SHAPES.get(self.shape).copied().filter(|_| self.shape > 0)?;
+        Some(lightcraft_engine::export::Border { color: self.color, thickness: f32::from(self.thickness.min(BORDER_STEPS)) / 100.0, ratio })
+    }
+
+    /// `params` with this border added (unchanged for Original).
+    pub fn apply(&self, mut params: Value) -> Value {
+        if let Some(b) = self.border() {
+            // (in per cent from the slider's whole steps: 0.05, not f32's 0.0500000007)
+            let thickness = f64::from(self.thickness.min(BORDER_STEPS)) / 100.0;
+            params["border"] = json!({"color": b.color, "thickness": thickness, "ratio": b.ratio});
+        }
+        params
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Page {
     #[default]
     Main,
     /// The form for Export as (`Handoff::Share`) or for Save to Photos.
     Form(Handoff),
+    Border,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,6 +148,7 @@ struct Sheet {
 struct Forms {
     export_as: Form,
     photos: Form,
+    border: BorderForm,
 }
 
 fn sheet_id() -> egui::Id {
@@ -158,6 +215,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let form = if to == Handoff::Photos { &mut forms.photos } else { &mut forms.export_as };
                 form_page(app, ui, &mut sheet, form, to);
             }
+            Page::Border => border_page(app, ui, &mut sheet, &mut forms.border),
         }
     });
     ctx.data_mut(|d| d.insert_temp(forms_id(), forms));
@@ -223,6 +281,11 @@ fn main_page(app: &mut LightcraftApp, ui: &mut egui::Ui, sheet: &mut Sheet, form
             sheet.page = Page::Form(Handoff::Share);
         }
     });
+    ui.add_space(8.0);
+    ui.separator();
+    if border_row(ui, any) {
+        sheet.page = Page::Border;
+    }
     if app.services.save_to_photos.is_some() {
         ui.add_space(8.0);
         ui.separator();
@@ -336,6 +399,149 @@ fn list_row(ui: &mut egui::Ui, id: &str, icon: Icon, label: &str, enabled: bool)
     (enabled && resp.clicked() && !on_gear, on_gear)
 }
 
+/// "Add border and share": a framed square for an icon, the label and ›. True when tapped.
+fn border_row(ui: &mut egui::Ui, enabled: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), if enabled { Sense::click() } else { Sense::hover() });
+    register(ui, "button:shareBorder", r);
+    let p = ui.painter();
+    let color = if enabled { t.text } else { t.text_dim };
+    let icon = Rect::from_center_size(egui::pos2(r.left() + 14.0, r.center().y), vec2(20.0, 20.0));
+    p.rect_stroke(icon, 2.0, Stroke::new(1.5, color), StrokeKind::Inside);
+    p.rect_filled(icon.shrink(5.0), 1.0, color);
+    p.text(egui::pos2(r.left() + 40.0, r.center().y), egui::Align2::LEFT_CENTER, crate::i18n::tr("Add border"), t.font(16.0), color);
+    paint(p, Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronRight, t.text_dim);
+    enabled && resp.clicked()
+}
+
+/// Add border: the first chosen photo framed as it will be, then the colour, the thickness and
+/// the canvas's shape; the round button shares the chosen photos with that border.
+fn border_page(app: &mut LightcraftApp, ui: &mut egui::Ui, sheet: &mut Sheet, form: &mut BorderForm) {
+    let t = Tokens::get(ui.ctx());
+    let ids: Vec<PhotoId> = sheet.ids.iter().zip(&sheet.chosen).filter(|(_, c)| **c).map(|(id, _)| *id).collect();
+    let mut share = false;
+    let back = head(ui, true, crate::i18n::tr("Border options"), |ui| {
+        let (r, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
+        register(ui, "button:shareBorderShare", r);
+        ui.painter().circle_filled(r.center(), 20.0, if ids.is_empty() { t.divider } else { t.accent });
+        paint(ui.painter(), Rect::from_center_size(r.center(), vec2(20.0, 20.0)), Icon::Share, egui::Color32::WHITE);
+        share = resp.clicked() && !ids.is_empty();
+    });
+    if back {
+        sheet.page = Page::Main;
+        return;
+    }
+    border_preview(app, ui, ids.first().copied(), form);
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(crate::i18n::tr("Color")).font(t.font(14.0)).color(t.text_dim));
+    egui::ScrollArea::horizontal().id_salt("border-colors").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(
+        ui,
+        |ui| {
+            ui.horizontal(|ui| {
+                for (i, c) in BORDER_COLORS.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
+                    register(ui, format!("button:borderColor{i}"), r);
+                    let p = ui.painter();
+                    p.circle(r.center(), 14.0, egui::Color32::from_rgb(c[0], c[1], c[2]), Stroke::new(1.0, t.divider));
+                    if form.color == *c {
+                        p.circle_stroke(r.center(), 19.0, Stroke::new(2.5, t.text));
+                    }
+                    if resp.clicked() {
+                        form.color = *c;
+                    }
+                }
+            });
+        },
+    );
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr("Thickness")).font(t.font(14.0)).color(t.text_dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(form.thickness.to_string()).font(t.font(14.0)).color(t.text));
+        });
+    });
+    ui.spacing_mut().slider_width = ui.available_width() - 8.0;
+    let slider = ui.add_enabled(form.shape > 0, egui::Slider::new(&mut form.thickness, 0..=BORDER_STEPS).show_value(false));
+    register(ui, "slider:borderThickness", slider.rect);
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(crate::i18n::tr("Border size")).font(t.font(14.0)).color(t.text_dim));
+    egui::ScrollArea::horizontal().id_salt("border-shapes").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(
+        ui,
+        |ui| {
+            ui.horizontal(|ui| {
+                for (i, (label, ratio)) in BORDER_SHAPES.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(vec2(58.0, 70.0), Sense::click());
+                    register(ui, format!("button:borderShape{i}"), r);
+                    let on = form.shape == i;
+                    let p = ui.painter();
+                    let well = Rect::from_min_size(r.min + vec2(7.0, 2.0), vec2(44.0, 44.0));
+                    p.rect(
+                        well,
+                        6.0,
+                        if on { t.tool_active } else { t.field },
+                        Stroke::new(1.0, if on { t.accent } else { t.field_border }),
+                        StrokeKind::Inside,
+                    );
+                    let color = if on { t.text } else { t.icon };
+                    match (i, ratio) {
+                        (0, _) => paint(p, well.shrink(13.0), Icon::Close, color),
+                        (_, None) => {
+                            p.rect_stroke(well.shrink(9.0), 1.0, Stroke::new(1.5, color), StrokeKind::Inside);
+                            p.rect_stroke(well.shrink(14.0), 0.0, Stroke::new(1.0, color), StrokeKind::Inside);
+                        }
+                        (_, Some([w, h])) => {
+                            let k = 26.0 / f32::from((*w).max(*h)).max(1.0);
+                            let shape = Rect::from_center_size(well.center(), vec2(f32::from(*w) * k, f32::from(*h) * k));
+                            p.rect_stroke(shape, 1.0, Stroke::new(1.5, color), StrokeKind::Inside);
+                        }
+                    }
+                    p.text(
+                        egui::pos2(r.center().x, r.bottom() - 10.0),
+                        egui::Align2::CENTER_CENTER,
+                        crate::i18n::tr(label),
+                        t.font(12.5),
+                        if on { t.text } else { t.text_label },
+                    );
+                    if resp.clicked() {
+                        form.shape = i;
+                    }
+                }
+            });
+        },
+    );
+    if share {
+        let params = form.apply(Form::default().params(&ids, None));
+        run_params(app, ui.ctx(), params, Handoff::Share);
+    }
+}
+
+/// The photo as Add border will frame it: the border's colour and shape round the thumbnail.
+fn border_preview(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Option<PhotoId>, form: &BorderForm) {
+    let t = Tokens::get(ui.ctx());
+    let avail = ui.available_width();
+    let area_h = (avail * 0.75).min(ui.ctx().content_rect().height() * 0.32);
+    let (area, _) = ui.allocate_exact_size(vec2(avail, area_h), Sense::hover());
+    register(ui, "image:borderPreview", area);
+    let Some(id) = id else { return };
+    let ppp = ui.ctx().pixels_per_point();
+    super::grid::request_thumb(app, id, (area_h * ppp) as usize, 10);
+    let Some(tex) = app.renderer.thumb(id) else {
+        ui.painter().rect_filled(area, 4.0, t.divider);
+        return;
+    };
+    let [w, h] = tex.size;
+    let (cw, ch, x0, y0) = form.border().map_or((w, h, 0, 0), |b| b.layout(w, h));
+    let scale = (area.width() / cw.max(1) as f32).min(area.height() / ch.max(1) as f32);
+    let canvas = Rect::from_center_size(area.center(), vec2(cw as f32 * scale, ch as f32 * scale));
+    let [r, g, b] = form.color;
+    // (outlined: a dark border on the dark sheet still shows its edge)
+    ui.painter().rect(canvas, 0.0, egui::Color32::from_rgb(r, g, b), Stroke::new(1.0, t.divider), StrokeKind::Outside);
+    let photo = Rect::from_min_size(canvas.min + vec2(x0 as f32 * scale, y0 as f32 * scale), vec2(w as f32 * scale, h as f32 * scale));
+    let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    ui.painter().image(tex.tex.id(), photo, uv, egui::Color32::WHITE);
+}
+
 /// Export as / Save to Photos settings; ✓ runs it (Export as), or keeps them (Save to Photos).
 fn form_page(app: &mut LightcraftApp, ui: &mut egui::Ui, sheet: &mut Sheet, form: &mut Form, to: Handoff) {
     let t = Tokens::get(ui.ctx());
@@ -435,6 +641,12 @@ fn run(app: &mut LightcraftApp, ctx: &egui::Context, form: &Form, ids: &[PhotoId
         return;
     }
     let params = form.params(ids, watermark(app).as_ref());
+    run_params(app, ctx, params, to);
+}
+
+/// Run `app.export` with `params` in the background, handing its files `to` the share sheet or the
+/// photo library; Export with Previous keeps what it had.
+fn run_params(app: &mut LightcraftApp, ctx: &egui::Context, params: Value, to: Handoff) {
     let previous = app.session.last_export.clone();
     app.export_handoff = Some(to);
     let r = app.run("app.export", params);
@@ -458,6 +670,22 @@ mod tests {
             p,
             json!({"format": "jpeg", "ids": [3, 5], "background": true, "longEdge": 0, "dontEnlarge": true, "colorSpace": "srgb", "quality": 92})
         );
+    }
+
+    #[test]
+    fn add_border_adds_the_export_border() {
+        let p = BorderForm::default().apply(Form::default().params(&[PhotoId(1)], None));
+        assert_eq!(p["border"], json!({"color": [255, 255, 255], "thickness": 0.05, "ratio": null}));
+        let square = BorderForm { color: [0, 0, 0], thickness: 2, shape: 2 };
+        assert_eq!(square.apply(json!({}))["border"], json!({"color": [0, 0, 0], "thickness": 0.02, "ratio": [1, 1]}));
+        let none = BorderForm { shape: 0, ..Default::default() };
+        assert!(none.apply(json!({})).get("border").is_none(), "Original: no border");
+        // every shape the sheet offers is one the export draws
+        for (i, (label, ratio)) in BORDER_SHAPES.iter().enumerate().skip(1) {
+            let b = BorderForm { shape: i, ..Default::default() }.border().expect("a border");
+            assert_eq!(b.ratio, *ratio);
+            assert!(ratio.is_none() || b.shape().is_some(), "{label}");
+        }
     }
 
     #[test]

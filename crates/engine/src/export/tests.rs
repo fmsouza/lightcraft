@@ -1523,3 +1523,41 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
+
+#[test]
+fn a_border_frames_the_exported_file() {
+    let img = Rgba8::from_fn(40, 20, |_, _| [10, 200, 30, 255]);
+    let p = json!({"format": "png", "border": {"color": [255, 255, 255], "thickness": 0.1, "ratio": "1:1"}});
+    ExportOptions::validate("app.export", &p).expect("valid border");
+    let o = ExportOptions::from_json(&p);
+    assert_eq!(o.border, Some(Border { color: [255, 255, 255], thickness: 0.1, ratio: Some([1, 1]) }));
+    assert_eq!(ExportOptions::from_json(&o.to_json()).border, o.border, "round-trips through its params");
+    let d = lightcraft_codecs::decode(&encode_image(&img, &o).unwrap(), Default::default()).unwrap().to_srgb8();
+    assert_eq!((d.width, d.height), (48, 48), "4 px each side of the long edge, then square");
+    assert_eq!(d.get(0, 0), [255, 255, 255, 255]);
+    assert_eq!(d.get(24, 24), [10, 200, 30, 255], "the photo in the middle");
+    // the default export keeps the photo's own size
+    let d = lightcraft_codecs::decode(
+        &encode_image(&img, &ExportOptions { format: ExportFormat::Png, ..Default::default() }).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!((d.width, d.height), (40, 20));
+}
+
+#[test]
+fn border_params_are_checked() {
+    for bad in [
+        json!({"border": "white"}),
+        json!({"border": {"thickness": 0.9}}),
+        json!({"border": {"color": [300, 0, 0]}}),
+        json!({"border": {"ratio": "10:1"}}),
+        json!({"border": {"ratio": [0, 1]}}),
+        json!({"border": {"width": 3}}),
+    ] {
+        assert!(ExportOptions::validate("app.export", &bad).is_err(), "{bad}");
+    }
+    for ok in [json!({"border": {}}), json!({"border": {"ratio": null}}), json!({"border": {"ratio": [4, 5]}}), json!({"border": null})] {
+        ExportOptions::validate("app.export", &ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+    }
+}

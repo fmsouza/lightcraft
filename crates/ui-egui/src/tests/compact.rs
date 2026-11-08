@@ -1100,3 +1100,30 @@ fn phone_grid_months_are_heading_rows_without_half_empty_rows() {
     assert!(headers.len() >= 2, "a heading per month on screen: {headers:?}");
     assert!(headers.iter().all(|r| r.width() > PHONE[0] * 0.8), "headings are full-width rows: {headers:?}");
 }
+
+#[test]
+fn phone_add_border_shares_the_photo_framed() {
+    let (mut h, shared, _) = phone_host(json!({"view": "detail"}));
+    let written: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+    let w = written.clone();
+    h.app.services.write_shared = Some(std::sync::Arc::new(move |_: &str, bytes: &[u8]| {
+        *w.lock().unwrap() = bytes.to_vec();
+        Ok(())
+    }));
+    click(&mut h, "icon:share");
+    click(&mut h, "button:shareBorder");
+    assert!(widget(&h, "image:borderPreview").is_some(), "the border page");
+    click(&mut h, "button:borderShape2");
+    click(&mut h, "button:borderColor4");
+    click(&mut h, "button:shareBorderShare");
+    finish_export(&mut h);
+    assert_eq!(shared.borrow().len(), 1, "to the share sheet");
+    let bytes = written.lock().unwrap().clone();
+    let img = lightcraft_codecs::decode(&bytes, Default::default()).expect("a JPEG").to_srgb8();
+    assert_eq!(img.width, img.height, "1:1");
+    let [r, g, b, _] = img.get(0, 0);
+    assert!(r < 16 && g < 16 && b < 16, "black border: {:?}", img.get(0, 0));
+    assert!(widget(&h, "panel:shareSheet").is_none(), "the sheet closes");
+    assert_eq!(h.app.session.last_export, None, "Export with Previous keeps what it had");
+}
+

@@ -269,7 +269,8 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "addToPhotos": {"type": "boolean", "description": "macOS: after writing the files, add them to Apple Photos (Apple Events to Photos' import; the first time, macOS asks the user to allow LightCraft to control Photos). The outcome is `applePhotos` in the result, the import job: {job, running, requested, album, imported?, ids?, warning?, error?}; headless waits for Photos, the desktop app returns the running job (outcome: command export.photosImports {job}). The files are written either way. An error before exporting on other platforms, or while another import is reserved or running"},
                 "photosAlbum": {"type": "string", "description": "With addToPhotos: the album to add them to, a top-level Photos album of exactly this name, made when missing (several of that name: nothing is added); default none"},
                 "watermark": {"description": "Text, or {text, vertical (boolean; defaults to false: upright columns right to left), size (text height as a fraction of the short edge, 0.005..0.5; default 0.035), opacity (0..1; default 0.7), anchor (topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight), insetX (margin from the left or right edge as a fraction of the short edge, 0..0.4; default 0.025), insetY (margin from the top or bottom edge, same units), inset (sets both), rotation (degrees clockwise: 0|90|180|270; default 0; the watermark is sized before it is turned), color [r,g,b] (sRGB 0..255), shadow (boolean), image (path of a graphic drawn instead of the text), imageWidth (fraction of the photo's width, 0.01..1; default 0.2)}. Unknown keys and out-of-range sizes are errors"}
-            }),
+            })
+            .with_property("border", json!({"type": "object", "description": "A plain border round the photo, drawn last: {color [r,g,b] (sRGB 0..255; default white), thickness (the narrowest sides' width as a fraction of the photo's long edge, 0..0.25; default 0.05), ratio ([width, height] or \"width:height\", e.g. \"1:1\" or \"4:5\", at most 4:1 either way: the canvas takes that shape with the photo centred; null or absent: the same border on every side)}. The border adds to the exported size. Unknown keys and out-of-range values are errors"})),
             &[],
         ),
     ];
@@ -803,6 +804,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                         "dngCompression",
                         "addToPhotos",
                         "photosAlbum",
+                        "border",
                     ],
                 ),
             )
@@ -835,4 +837,18 @@ pub(crate) fn doc_inspect(b: &mut dyn Backend) -> Result<Value, String> {
     let library = exec(b, "library.state", json!({}))?;
     let stats = exec(b, "catalog.stats", json!({}))?;
     Ok(json!({"library": library, "stats": stats}))
+}
+
+/// One more property on a tool's argument object: for schemas past `json!`'s recursion limit.
+trait WithProperty {
+    fn with_property(self, key: &str, schema: Value) -> Value;
+}
+
+impl WithProperty for Value {
+    fn with_property(mut self, key: &str, schema: Value) -> Value {
+        if let Some(o) = self.as_object_mut() {
+            o.insert(key.into(), schema);
+        }
+        self
+    }
 }
