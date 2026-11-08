@@ -56,6 +56,11 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
         return ui.menu_button(atoms, contents);
     }
     let button = egui::Button::new(atoms.into_atoms()).right_text("    ");
+    // the phone layout's context sheet opens a submenu inline, under its row: there is no room
+    // beside a sheet as wide as the screen
+    if crate::menu_level::context_depth(ui.ctx()).is_some() && crate::panels::compact::is_compact(ui.ctx()) {
+        return inline_submenu(ui, button, contents);
+    }
     // in a context menu, the submenu is bounded by the window like the menu itself
     let (response, inner) = match crate::menu_level::context_depth(ui.ctx()) {
         Some(depth) => {
@@ -73,6 +78,31 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
     egui::InnerResponse::new(inner.map(|r| r.inner), response)
 }
 
+fn inline_toggled_id() -> egui::Id {
+    egui::Id::unique("context-sheet-submenu-toggled")
+}
+
+/// A submenu row that opens its rows under it (indented) instead of beside it; tapped again, it
+/// closes. Its rows are the sheet's, so a tap on one runs it and closes the sheet as usual.
+fn inline_submenu<R>(ui: &mut Ui, button: egui::Button<'_>, contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    let response = ui.add(button);
+    let key = response.id.with("inline-submenu-open");
+    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|d| {
+            d.insert_temp(key, open);
+            // the sheet stays open for this tap ([`context_menu`])
+            d.insert_temp(inline_toggled_id(), true);
+        });
+    }
+    let center = pos2(response.rect.right() - ui.spacing().button_padding.x - 8.0, response.rect.center().y);
+    let icon = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+    paint(ui.painter(), Rect::from_center_size(center, vec2(16.0, 16.0)), icon, ui.style().interact(&response).fg_stroke.color);
+    let inner = open.then(|| ui.indent(key, contents).inner);
+    egui::InnerResponse::new(inner, response)
+}
+
 /// A context menu on `response`, as `Response::context_menu` gives, that a right-click moves
 /// (#1877). egui closes a menu on any click once it was open on the previous frame, and judges
 /// that by the menu's id: a right-click elsewhere on the same widget while its menu is open
@@ -86,9 +116,57 @@ pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> 
     if response.secondary_clicked() && carrying(&response.ctx) {
         return None;
     }
-    egui::Popup::context_menu(response)
-        .close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick))
-        .show(|ui| crate::menu_level::context_level(ui, 1, add_contents))
+    if !crate::panels::compact::is_compact(&response.ctx) {
+        return egui::Popup::context_menu(response)
+            .close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick))
+            .show(|ui| crate::menu_level::context_level(ui, 1, add_contents));
+    }
+    // (a tap inside closes it below, unless it opened or closed a submenu row)
+    let popup = egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClickOutside));
+    // the phone layout: a sheet across the bottom of the screen with finger-sized rows, over the
+    // screen dimmed, instead of a small menu at the finger (submenus still open beside their row)
+    let ctx = response.ctx.clone();
+    let screen = ctx.content_rect();
+    let t = Tokens::get(&ctx);
+    let frame = egui::Frame::NONE
+        .fill(t.chrome)
+        .stroke(egui::Stroke::new(1.0, t.divider))
+        .corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 })
+        .inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 16 });
+    let shown = popup
+        .anchor(egui::PopupAnchor::Position(pos2(screen.left(), screen.bottom())))
+        .align(egui::RectAlign::TOP_START)
+        .align_alternatives(&[])
+        .gap(0.0)
+        .width(screen.width() - 24.0)
+        .frame(frame)
+        .style(|s: &mut egui::Style| {
+            // (a menu's frameless rows, as the default menu style has them)
+            s.visuals.button_frame = false;
+            s.spacing.button_padding = vec2(14.0, 12.0);
+            s.spacing.interact_size.y = 44.0;
+            s.spacing.item_spacing.y = 2.0;
+            for style in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                if let Some(f) = s.text_styles.get_mut(&style) {
+                    f.size = 16.0;
+                }
+            }
+        })
+        .show(|ui| {
+            ui.set_min_width(screen.width() - 24.0);
+            register(ui, "panel:contextSheet", ui.max_rect());
+            crate::menu_level::context_level(ui, 1, add_contents)
+        });
+    if let Some(sheet) = &shown {
+        let dim = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("context-sheet-dim"));
+        ctx.layer_painter(dim).rect_filled(screen, 0.0, egui::Color32::from_black_alpha(110));
+        let toggled = ctx.data_mut(|d| d.remove_temp::<bool>(inline_toggled_id())).unwrap_or(false);
+        let tapped_inside = ctx.input(|i| i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| sheet.response.rect.contains(p)));
+        if tapped_inside && !toggled && !response.secondary_clicked() {
+            egui::Popup::close_id(&ctx, egui::Popup::default_response_id(response));
+        }
+    }
+    shown
 }
 
 /// Record whether photos are being carried as the frame starts, for [`context_menu`] to read. A

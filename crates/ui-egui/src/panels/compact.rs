@@ -252,7 +252,8 @@ fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("view.back", json!({}));
         }
         bar_right(app, ui, false, |app, right| {
-            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Share").clicked() {
+            let any = app.session.active().is_some() || !app.session.selection.ids.is_empty();
+            if icon_button(right, "share", Icon::Share, BUTTON, false, any, "Share").clicked() {
                 super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
             }
             // Filter sits on the album row; a folder's own header (Local) has no room for it
@@ -479,8 +480,8 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Select mode's bar: how many photos are selected, then Share (the Share sheet), Album, Move to Folder,
-/// Delete, and Done (leaves Select mode).
+/// Select mode's bar: how many photos are selected, then Album, Move to Folder, Delete, and Done
+/// (leaves Select mode). Share is the top bar's, which shares the selection.
 fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let n = app.session.selection.ids.len();
@@ -512,9 +513,6 @@ fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let album = icon_button(&mut right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
         if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
             egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
-        }
-        if icon_button(&mut right, "selectShare", Icon::Share, BUTTON, false, any, "Share").clicked() {
-            super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
         }
     });
 }

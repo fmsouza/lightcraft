@@ -1090,7 +1090,9 @@ fn phone_library_has_no_bottom_bar_but_select_mode_keeps_its_own() {
     h.step();
     click(&mut h, "more:view.selectMode");
     assert!(h.app.ui.select_mode, "… → Select Photos");
-    assert!(widget(&h, "icon:selectShare").is_some(), "Select mode's bar");
+    assert!(widget(&h, "icon:selectDelete").is_some(), "Select mode's bar");
+    assert!(widget(&h, "icon:selectShare").is_none(), "Share is the top bar's");
+    assert!(widget(&h, "icon:share").is_some());
 }
 
 #[test]
@@ -1183,4 +1185,31 @@ fn phone_my_photos_drawer_has_finger_sized_rows() {
     let d = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
     let row = widget(&d, "source:all").expect("All Photos in the sidebar");
     assert!(row.height() < 32.0, "{row:?}");
+}
+
+#[test]
+fn phone_long_press_menus_are_a_sheet_with_inline_submenus() {
+    let mut h = grid_phone();
+    click(&mut h, "icon:sidebar");
+    let r = h.request("ui.clickWidget", json!({"id": "source:album:6", "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let sheet = widget(&h, "panel:contextSheet").expect("the album's menu as a sheet");
+    assert!(sheet.width() > PHONE[0] - 40.0, "as wide as the screen: {sheet:?}");
+    assert!(sheet.bottom() > PHONE[1] - 40.0, "along its bottom: {sheet:?}");
+    let rows = widget(&h, "menu-rows:1").expect("its rows");
+    // a submenu opens under its row and the sheet stays
+    let before = rows.height();
+    click(&mut h, "button:albumImport");
+    assert!(widget(&h, "panel:contextSheet").is_some(), "a submenu row keeps the sheet open");
+    let after = widget(&h, "menu-rows:1").expect("its rows").height();
+    assert!(after > before, "the submenu's rows open inline: {before} → {after}");
+    // a tap on an item closes it
+    let first = widget(&h, "menu-rows:1").expect("its rows");
+    let r = h.request("ui.click", json!({"x": first.left() + 60.0, "y": first.top() + 22.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(widget(&h, "panel:contextSheet").is_none(), "an item closes the sheet");
 }
