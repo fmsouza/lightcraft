@@ -1213,3 +1213,39 @@ fn phone_long_press_menus_are_a_sheet_with_inline_submenus() {
     h.step();
     assert!(widget(&h, "panel:contextSheet").is_none(), "an item closes the sheet");
 }
+
+#[test]
+fn phone_rate_sheet_rates_flags_and_labels_by_finger() {
+    // the editor's photo
+    let mut h = demo(PHONE, json!({"view": "detail"}));
+    let id = h.app.session.active().expect("a photo");
+    let photo = |h: &Headless| h.app.session.catalog.photo(id).cloned().expect("the photo");
+    click(&mut h, "icon:rate");
+    assert!(widget(&h, "panel:rateSheet").is_some(), "★ opens the Rate sheet");
+    click(&mut h, "rate:star-4");
+    assert_eq!(photo(&h).rating, 4);
+    click(&mut h, "rate:star-4");
+    assert_eq!(photo(&h).rating, 0, "the lit last star again clears it");
+    click(&mut h, "rate:flag-reject");
+    assert_eq!(photo(&h).flag, lightcraft_catalog::Flag::Reject);
+    click(&mut h, "rate:label-purple");
+    assert_eq!(photo(&h).label, Some(lightcraft_catalog::ColorLabel::Purple));
+    click(&mut h, "rate:label-none");
+    assert_eq!(photo(&h).label, None);
+    assert_eq!(h.app.session.active(), Some(id), "the editor stays on its photo");
+    click(&mut h, "button:rateSheetDone");
+    assert!(widget(&h, "panel:rateSheet").is_none());
+    // a selection, from Select mode
+    let mut h = grid_phone();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.run("view.selectMode", json!({"on": true})).is_ok());
+    h.step();
+    h.step();
+    click(&mut h, "icon:selectRate");
+    click(&mut h, "rate:star-2");
+    for id in &ids {
+        assert_eq!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(*id)).expect("photo").rating, 2, "photo {id}");
+    }
+}

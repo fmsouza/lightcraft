@@ -27,6 +27,7 @@ pub mod people;
 pub mod person;
 pub mod presets;
 pub mod profiles;
+pub mod rate_sheet;
 pub mod right;
 pub mod second;
 pub mod share_sheet;

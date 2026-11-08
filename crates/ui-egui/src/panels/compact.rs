@@ -144,6 +144,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     super::filter_sheet::show(app, ui.ctx());
     super::more_sheet::show(app, ui.ctx());
     super::sort_sheet::show(app, ui.ctx());
+    super::rate_sheet::show(app, ui.ctx());
 }
 
 /// A bar along the top with the safe-area and margins of the compact layout.
@@ -399,7 +400,7 @@ fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     }
 }
 
-/// The editor's bar: Back to the photos, then (from the right) "…", Export, Redo, Undo and
+/// The editor's bar: Back to the photos, then (from the right) "…", Share, Rate, Redo, Undo and
 /// Show Original (held down: the photo as shot, let go: the edit).
 fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     top_bar(ui, |ui| {
@@ -409,6 +410,11 @@ fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         bar_right(app, ui, true, |app, right| {
             if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Share").clicked() {
                 super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, true));
+            }
+            let active = app.session.active();
+            let rated = active.and_then(|id| app.session.catalog.photo(id)).is_some_and(|p| p.rating > 0);
+            if icon_button(right, "rate", if rated { Icon::StarFilled } else { Icon::Star }, BUTTON, false, active.is_some(), "Rate").clicked() {
+                super::rate_sheet::open(right.ctx(), active.into_iter().collect());
             }
             if undo_button(right, "redo", "Redo", true).clicked() {
                 let _ = app.run("edit.redo", json!({}));
@@ -480,7 +486,7 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Select mode's bar: how many photos are selected, then Album, Move to Folder, Delete, and Done
+/// Select mode's bar: how many photos are selected, then Rate, Album, Move to Folder, Delete, and Done
 /// (leaves Select mode). Share is the top bar's, which shares the selection.
 fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -509,6 +515,9 @@ fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             && icon_button(&mut right, "selectMove", Icon::Folder, BUTTON, false, any, "Move to Folder…").clicked()
         {
             crate::panels::grid::move_to_folder(app, right.ctx());
+        }
+        if icon_button(&mut right, "selectRate", Icon::Star, BUTTON, false, any, "Rate").clicked() {
+            super::rate_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
         }
         let album = icon_button(&mut right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
         if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
