@@ -1127,3 +1127,60 @@ fn phone_add_border_shares_the_photo_framed() {
     assert_eq!(h.app.session.last_export, None, "Export with Previous keeps what it had");
 }
 
+#[test]
+fn phone_all_menus_are_pages_a_finger_can_use() {
+    let mut h = grid_phone();
+    click(&mut h, "icon:more");
+    assert!(widget(&h, "panel:moreSheet").is_some(), "… is a sheet");
+    click(&mut h, "more:allMenus");
+    let file = widget(&h, "menu:File").expect("the menu titles");
+    assert!(file.height() >= 44.0 && file.width() > PHONE[0] * 0.8, "full-width finger rows: {file:?}");
+    click(&mut h, "menu:View");
+    assert!(widget(&h, "menu:File").is_none(), "View's page replaces the titles");
+    click(&mut h, "submenu:Grid Info");
+    assert!(widget(&h, "menuitem:view.photoGrid").is_none(), "a submenu is the next page");
+    click(&mut h, "icon:moreSheetClose");
+    click(&mut h, "menuitem:view.squareGrid");
+    assert_eq!(h.app.ui.view, ViewMode::SquareGrid, "an item runs its command");
+    assert!(widget(&h, "panel:moreSheet").is_none(), "and the sheet closes");
+    // ‹ goes back a page at a time
+    click(&mut h, "icon:more");
+    click(&mut h, "more:allMenus");
+    click(&mut h, "menu:Edit");
+    click(&mut h, "icon:moreSheetClose");
+    assert!(widget(&h, "menu:File").is_some(), "back on the titles");
+    click(&mut h, "icon:moreSheetClose");
+    assert!(widget(&h, "more:allMenus").is_some(), "back on the first page");
+}
+
+#[test]
+fn phone_sort_is_a_sheet_of_finger_sized_choices() {
+    let mut h = grid_phone();
+    click(&mut h, "icon:sort");
+    assert!(widget(&h, "panel:sortSheet").is_some(), "Sort opens a sheet");
+    let row = widget(&h, "sheetSort:key-fileName").expect("a row per key");
+    assert!(row.height() >= 44.0, "{row:?}");
+    click(&mut h, "sheetSort:key-fileName");
+    assert_eq!(h.app.session.sort.key, lightcraft_catalog::SortKey::FileName);
+    click(&mut h, "sheetSort:asc");
+    assert!(h.app.session.sort.ascending);
+    click(&mut h, "sheetSort:group-year");
+    assert_eq!(h.app.session.sort.group, lightcraft_catalog::GroupBy::Year);
+    click(&mut h, "sheetSort:key-random");
+    assert!(widget(&h, "sheetSort:asc").is_none(), "no order for a shuffle");
+    assert!(widget(&h, "sheetSort:reshuffle").is_some());
+    click(&mut h, "button:sortSheetDone");
+    assert!(widget(&h, "panel:sortSheet").is_none());
+}
+
+#[test]
+fn phone_my_photos_drawer_has_finger_sized_rows() {
+    let mut h = grid_phone();
+    click(&mut h, "icon:sidebar");
+    let row = widget(&h, "source:all").expect("All Photos in the drawer");
+    assert!(row.height() >= 44.0, "a finger's row: {row:?}");
+    // the desktop keeps its compact rows
+    let d = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let row = widget(&d, "source:all").expect("All Photos in the sidebar");
+    assert!(row.height() < 32.0, "{row:?}");
+}

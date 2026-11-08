@@ -15,6 +15,17 @@ const MAX_NAME_NEED: f32 = 140.0;
 /// Height of a sidebar row.
 pub(super) const ROW_HEIGHT: f32 = 29.0;
 
+/// Height of a sidebar row on this screen: [`ROW_HEIGHT`], or a finger's 44 pt in the phone
+/// layout's My Photos drawer.
+pub(super) fn row_height(ctx: &egui::Context) -> f32 {
+    if crate::panels::compact::is_compact(ctx) { 44.0 } else { ROW_HEIGHT }
+}
+
+/// A row name's text size: larger in the phone layout's drawer.
+fn name_size(ctx: &egui::Context) -> f32 {
+    if crate::panels::compact::is_compact(ctx) { 16.0 } else { 13.5 }
+}
+
 /// Temp-data key of the row (its widget id after `source:`, lower-case) the sidebar scrolls to
 /// this frame: set before the sections are drawn, cleared after.
 pub(super) const SCROLL_TO_ROW: &str = "left-scroll-to-row";
@@ -159,7 +170,7 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
     let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
     let t = Tokens::get(ui.ctx());
     let indent = drawn_indent(ui, indent);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_height(ui.ctx())), sense);
     if scroll_asked(ui, id) {
         ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
     }
@@ -188,7 +199,7 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
         icon,
         if selected { t.text } else { t.icon },
     );
-    let font = t.font(13.5);
+    let font = t.font(name_size(ui.ctx()));
     let color = if selected { t.text } else { t.text_label };
     // a count of nothing is there, but fainter: the rows that hold photos stand out
     let count_color = |n: usize| if n == 0 { t.text_dim.gamma_multiply(0.55) } else { t.text_dim };
@@ -233,7 +244,7 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
 /// and drawing them all every frame slows the whole app down (issue #1011). A row the sidebar is
 /// asked to scroll to is drawn. `label`, `count` and `mark` as for [`row_sensed`].
 pub(super) fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, count: Option<usize>, indent: f32, mark: bool) -> bool {
-    let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), ROW_HEIGHT));
+    let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_height(ui.ctx())));
     if ui.is_rect_visible(r) || scroll_asked(ui, id) {
         return false;
     }
@@ -242,7 +253,7 @@ pub(super) fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, lab
     let indent = drawn_indent(ui, indent);
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter();
-    let name_w = painter.layout_no_wrap(label.to_string(), t.font(13.5), t.text_label).size().x;
+    let name_w = painter.layout_no_wrap(label.to_string(), t.font(name_size(ui.ctx())), t.text_label).size().x;
     let count_w = count.filter(|_| app.ui.show_counts).map(|n| painter.layout_no_wrap(n.to_string(), t.font(12.5), t.text_dim).size().x);
     let mark_w = if mark { MARK_W } else { 0.0 };
     let mut needed = row_need(indent, name_w, mark_w, count_w);
@@ -275,7 +286,12 @@ fn row_need(indent: f32, name_w: f32, mark_w: f32, count_w: Option<f32>) -> f32 
 fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open: bool, id: egui::Id, widget: String) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let c = pos2(row.rect.left() + 10.0 + indent_x(ui.ctx(), indent), row.rect.center().y);
-    let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
+    // a finger's target in the phone layout's drawer (the row's height, the gutter's width)
+    let tri = if crate::panels::compact::is_compact(ui.ctx()) {
+        Rect::from_center_size(c, vec2(30.0, row.rect.height()))
+    } else {
+        Rect::from_center_size(c, vec2(16.0, 16.0))
+    };
     let tr = ui.interact(tri, id, Sense::click());
     register(ui, widget, tri);
     let col = if tr.hovered() { t.text } else { t.text_dim };

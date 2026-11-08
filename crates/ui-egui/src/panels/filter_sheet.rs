@@ -88,7 +88,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// The sheet's head: ✕ or ‹ at the left, the title, and `right` at the right. True when ✕/‹ is tapped.
-fn head(ui: &mut egui::Ui, back: bool, title: &str, right: impl FnOnce(&mut egui::Ui)) -> bool {
+pub(super) fn head(ui: &mut egui::Ui, back: bool, title: &str, right: impl FnOnce(&mut egui::Ui)) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut left = false;
     ui.horizontal(|ui| {
@@ -105,7 +105,7 @@ fn head(ui: &mut egui::Ui, back: bool, title: &str, right: impl FnOnce(&mut egui
 }
 
 /// A section's caption.
-fn caption(ui: &mut egui::Ui, text: &str) {
+pub(super) fn caption(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(10.0);
     ui.label(egui::RichText::new(crate::i18n::tr(text)).font(t.semibold(13.0)).color(t.text_dim));
@@ -113,7 +113,7 @@ fn caption(ui: &mut egui::Ui, text: &str) {
 }
 
 /// A rounded toggle with a label (and an optional icon before it); true when tapped.
-fn pill(ui: &mut egui::Ui, id: &str, icon: Option<(Icon, Color32)>, label: &str, on: bool) -> bool {
+pub(super) fn pill(ui: &mut egui::Ui, id: &str, icon: Option<(Icon, Color32)>, label: &str, on: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let label = crate::i18n::tr(label);
     let font = t.font(14.0);
@@ -121,7 +121,8 @@ fn pill(ui: &mut egui::Ui, id: &str, icon: Option<(Icon, Color32)>, label: &str,
     let icon_w = if icon.is_some() { 24.0 } else { 0.0 };
     let (r, resp) = ui.allocate_exact_size(vec2(text_w + icon_w + 28.0, 36.0), Sense::click());
     crate::widgets::announce_selected(&resp, label, on);
-    register(ui, format!("sheetFilter:{id}"), r);
+    // (a full id, `kind:name`, for another sheet's pills)
+    register(ui, if id.contains(':') { id.to_string() } else { format!("sheetFilter:{id}") }, r);
     let p = ui.painter();
     let fill = if on {
         t.tool_active
@@ -141,7 +142,7 @@ fn pill(ui: &mut egui::Ui, id: &str, icon: Option<(Icon, Color32)>, label: &str,
 }
 
 /// Pills that wrap onto as many rows as they need.
-fn pills(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn pills(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         add(ui);
@@ -169,7 +170,7 @@ fn nav_row(ui: &mut egui::Ui, id: &str, label: &str, value: &str, active: bool) 
 }
 
 /// A full-width button; `primary` is filled with the accent. True when tapped.
-fn wide_button(ui: &mut egui::Ui, id: &str, label: &str, primary: bool, enabled: bool) -> bool {
+pub(super) fn wide_button(ui: &mut egui::Ui, id: &str, label: &str, primary: bool, enabled: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 46.0), if enabled { Sense::click() } else { Sense::hover() });
@@ -359,7 +360,7 @@ fn labels(app: &mut LightcraftApp, ui: &mut egui::Ui, chosen: &[ColorLabel]) {
 }
 
 /// A row of a list page: the label, ✓ when it's the current one. True when tapped.
-fn value_row(ui: &mut egui::Ui, id: String, label: &str, on: bool) -> egui::Response {
+pub(super) fn value_row(ui: &mut egui::Ui, id: String, label: &str, on: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 46.0), Sense::click());

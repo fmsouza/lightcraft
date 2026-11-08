@@ -1,5 +1,5 @@
 use super::albums::top_level_drop_target;
-use super::rows::{ROW_HEIGHT, note_width};
+use super::rows::{note_width, row_height};
 use super::{Align2, Icon, LightcraftApp, Rect, Sense, SidebarSection, Tokens, icon_button, json, paint, pos2, register, vec2};
 
 /// Space above a section's header.
@@ -7,6 +7,11 @@ pub(super) const SECTION_GAP: f32 = 10.0;
 
 /// Height of a section's header.
 const SECTION_HEADER: f32 = 34.0;
+
+/// A section header's height on this screen: a finger's 44 pt in the phone layout's drawer.
+fn header_height(ctx: &egui::Context) -> f32 {
+    if crate::panels::compact::is_compact(ctx) { 44.0 } else { SECTION_HEADER }
+}
 
 /// One sidebar section: the gap above it, its header, and (while it is open) the rows `body`
 /// draws. Every section goes through here, so they all fold, space and announce themselves alike.
@@ -19,7 +24,7 @@ pub(super) fn section(
     body: impl FnOnce(&mut LightcraftApp, &mut egui::Ui),
 ) -> PlacedSection {
     ui.add_space(SECTION_GAP);
-    let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), SECTION_HEADER), Sense::hover());
+    let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), header_height(ui.ctx())), Sense::hover());
     // a hairline in the gap above tells the sections apart
     let t = Tokens::get(ui.ctx());
     let edge = visible_right(ui).min(header.right());
@@ -62,8 +67,9 @@ pub(super) fn visible_right(ui: &egui::Ui) -> f32 {
 pub(super) fn pinned_header(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSection], view_top: f32) {
     let pinned = placed.iter().find(|p| p.open && p.top < view_top && p.bottom > view_top);
     let rect = pinned.map(|p| {
-        let top = view_top.min(p.bottom - SECTION_HEADER);
-        Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + SECTION_HEADER)
+        let h = header_height(ui.ctx());
+        let top = view_top.min(p.bottom - h);
+        Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + h)
     });
     // rows ask where it is (next frame: they are laid out before it)
     ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-pinned-rect"), rect));
@@ -86,7 +92,7 @@ pub(super) fn pinned_header(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: 
 /// `sidebarEmpty:<id>`), so the section stays where it is instead of disappearing.
 fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_height(ui.ctx())), Sense::hover());
     register(ui, format!("sidebarEmpty:{}", section.id()), r);
     let text = crate::i18n::tr(section.empty_hint());
     let galley = ui.painter().layout_no_wrap(text.to_string(), t.font(12.5), t.text_dim);

@@ -142,6 +142,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     super::share_sheet::show(app, ui.ctx());
     super::filter_sheet::show(app, ui.ctx());
+    super::more_sheet::show(app, ui.ctx());
+    super::sort_sheet::show(app, ui.ctx());
 }
 
 /// A bar along the top with the safe-area and margins of the compact layout.
@@ -164,7 +166,7 @@ fn bar_right(app: &mut LightcraftApp, ui: &mut egui::Ui, editor: bool, add: impl
     let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
     right.spacing_mut().item_spacing.x = 0.0;
     let more = icon_button(&mut right, "more", Icon::Dots, BUTTON, false, true, "More");
-    more_menu(app, &more, editor);
+    more_menu(&more, editor);
     add(app, &mut right);
 }
 
@@ -189,36 +191,11 @@ const LIBRARY_MORE: &[(&str, &str)] = &[
     ("app.about", "About LightCraft"),
 ];
 
-/// "…": a short list of what this screen needs, as a phone photo editor has it, then All Menus
-/// (the desktop's menus, for everything else).
-fn more_menu(app: &mut LightcraftApp, more: &egui::Response, editor: bool) {
-    let has_photo = app.session.active().is_some();
-    let mut picked: Option<&str> = None;
-    egui::Popup::menu(more).show(|ui| {
-        ui.set_min_width(210.0);
-        for (id, label) in if editor { EDITOR_MORE } else { LIBRARY_MORE } {
-            let enabled = !editor || has_photo;
-            let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).frame(false));
-            register(ui, format!("more:{id}"), r.rect);
-            if r.clicked() {
-                picked = Some(id);
-            }
-            // the destructive one apart from the rest
-            if *id == "dialog.rename" {
-                ui.separator();
-            }
-        }
-        if !app.native_menu {
-            ui.separator();
-            let bottom = Some(ui.max_rect().bottom());
-            let r = ui.menu_button(crate::i18n::tr("All Menus"), |ui| crate::menubar::menus_in(app, ui, bottom));
-            register(ui, "more:allMenus", r.response.rect);
-        }
-    });
-    if let Some(id) = picked
-        && let Err(e) = crate::menubar::run_item(app, id, json!({}))
-    {
-        app.toast(&more.ctx, e);
+/// "…": the More sheet ([`super::more_sheet`]) with a short list of what this screen needs, as a
+/// phone photo editor has it, then All Menus (the desktop's menus, for everything else).
+fn more_menu(more: &egui::Response, editor: bool) {
+    if more.clicked() {
+        super::more_sheet::open(&more.ctx, if editor { EDITOR_MORE } else { LIBRARY_MORE }, editor);
     }
 }
 
@@ -324,8 +301,9 @@ fn filter_button(app: &LightcraftApp, ui: &mut egui::Ui) {
 pub fn album_tools(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let mut row = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)));
     row.spacing_mut().item_spacing.x = 4.0;
-    let sort = icon_button(&mut row, "sort", Icon::Sort, BUTTON, false, true, "Sort");
-    egui::Popup::menu(&sort).show(|ui| super::bottombar::sort_menu(app, ui));
+    if icon_button(&mut row, "sort", Icon::Sort, BUTTON, false, true, "Sort").clicked() {
+        super::sort_sheet::open(row.ctx());
+    }
     filter_button(app, &mut row);
 }
 
