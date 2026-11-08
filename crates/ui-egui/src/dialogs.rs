@@ -177,6 +177,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             ui.disable();
         }
         ui.spacing_mut().item_spacing.y = 8.0;
+        // (the import review and Print lay themselves out for the phone)
+        if !import && !print {
+            crate::panels::compact::finger_style(ui);
+        }
         body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
             dialog_content(app, ui, &t, body_max, &mut confirm, &mut import_pressed, &mut dlg)
         });

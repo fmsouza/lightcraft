@@ -1249,3 +1249,22 @@ fn phone_rate_sheet_rates_flags_and_labels_by_finger() {
         assert_eq!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(*id)).expect("photo").rating, 2, "photo {id}");
     }
 }
+
+#[test]
+fn phone_dialogs_have_finger_sized_controls() {
+    let mut h = grid_phone();
+    assert!(h.app.run("dialog.newAlbum", json!({})).is_ok());
+    h.step();
+    h.step();
+    for id in ["field:albumName", "check:albumIncludeSelected", "button:dialogCancel", "button:dialogOk"] {
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
+        assert!(r.height() >= 44.0, "{id} is a finger's height: {r:?}");
+    }
+    // the desktop's dialog keeps its size
+    let mut d = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    assert!(d.app.run("dialog.newAlbum", json!({})).is_ok());
+    d.step();
+    d.step();
+    let ok = widget(&d, "button:dialogOk").expect("Create");
+    assert!(ok.height() <= 32.0, "{ok:?}");
+}

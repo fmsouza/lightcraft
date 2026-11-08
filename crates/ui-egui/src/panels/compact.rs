@@ -842,6 +842,26 @@ pub fn dialog<'a>(ctx: &egui::Context, win: egui::Window<'a>) -> egui::Window<'a
     win.auto_sized().min_width(w).max_width(w).max_height(area.height()).vscroll(true).constrain_to(area)
 }
 
+/// Finger-sized controls for a dialog in the compact layout: 44 pt buttons and fields, 16 pt
+/// text, larger check boxes and radio buttons, and more room between rows. Nothing elsewhere.
+pub fn finger_style(ui: &mut egui::Ui) {
+    if !is_compact(ui.ctx()) {
+        return;
+    }
+    let s = ui.style_mut();
+    s.spacing.interact_size.y = 44.0;
+    s.spacing.button_padding = vec2(16.0, 11.0);
+    s.spacing.item_spacing = vec2(10.0, 12.0);
+    s.spacing.icon_width = 24.0;
+    s.spacing.icon_width_inner = 14.0;
+    s.spacing.icon_spacing = 10.0;
+    for style in [egui::TextStyle::Body, egui::TextStyle::Button, egui::TextStyle::Monospace] {
+        if let Some(f) = s.text_styles.get_mut(&style) {
+            f.size = f.size.max(16.0);
+        }
+    }
+}
+
 /// A labelled row for dialogs: in the compact layout the label sits above its controls, which
 /// wrap; elsewhere `add` comes back for the caller's usual fixed label column.
 pub fn stacked_row<R, F: FnOnce(&mut egui::Ui) -> R>(ui: &mut egui::Ui, label: egui::RichText, add: F) -> Result<R, F> {
