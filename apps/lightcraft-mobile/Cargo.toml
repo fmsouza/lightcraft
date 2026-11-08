@@ -45,6 +45,8 @@ objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "
 raw-window-handle = "0.6"
 # the photo picker (src/ios_picker.rs)
 objc2-photos-ui = { version = "0.3", default-features = false, features = ["std", "PHPicker", "block2", "objc2-photos"] }
+# Save to Photos (src/ios_photos.rs)
+objc2-photos = { version = "0.3", default-features = false, features = ["std", "block2", "PHPhotoLibrary", "PHChangeRequest", "PHAssetChangeRequest", "PHAssetCreationRequest", "PhotosTypes"] }
 block2 = "0.6"
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
 

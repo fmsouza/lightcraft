@@ -845,3 +845,96 @@ fn phone_section_sheet_has_the_eye_and_the_auto_sync_banner() {
     h.step();
     assert!(widget(&h, "button:autoSyncOff").is_some(), "the Auto Sync banner in the sheet");
 }
+
+/// What a phone host got from the Share sheet: files offered to the share sheet, and files saved
+/// to the photo library, one list per export.
+type Handed = std::rc::Rc<std::cell::RefCell<Vec<Vec<String>>>>;
+
+/// [`demo`] with a phone host's export services: a background writer that writes nothing, the
+/// sandbox's export folder, the share sheet and Save to Photos.
+fn phone_host(ui: serde_json::Value) -> (Headless, Handed, Handed) {
+    let mut h = demo(PHONE, ui);
+    h.app.services.write_shared = Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(())));
+    h.app.services.export_dir = Some("/sandbox/Exports".into());
+    let (shared, saved) = (Handed::default(), Handed::default());
+    let (s, p) = (shared.clone(), saved.clone());
+    h.app.services.share = Some(Box::new(move |paths: &[String]| s.borrow_mut().push(paths.to_vec())));
+    h.app.services.save_to_photos = Some(Box::new(move |paths: &[String]| p.borrow_mut().push(paths.to_vec())));
+    (h, shared, saved)
+}
+
+fn finish_export(h: &mut Headless) {
+    let t0 = std::time::Instant::now();
+    while h.app.export.is_some() && t0.elapsed() < SETTLE {
+        h.step();
+    }
+    assert!(h.app.export.is_none(), "the export finished");
+}
+
+#[test]
+fn phone_share_sends_a_full_size_jpeg_to_the_share_sheet() {
+    let (mut h, shared, saved) = phone_host(json!({"view": "detail"}));
+    click(&mut h, "icon:share");
+    assert!(widget(&h, "panel:shareSheet").is_some(), "Share opens the sheet");
+    assert!(widget(&h, "photo:share:0").is_some() && widget(&h, "photo:share:1").is_none(), "the editor shares its photo");
+    click(&mut h, "button:shareNow");
+    finish_export(&mut h);
+    let shared = shared.borrow();
+    assert_eq!(shared.len(), 1, "{shared:?}");
+    assert!(shared[0].len() == 1 && shared[0][0].starts_with("/sandbox/Exports/") && shared[0][0].ends_with(".jpg"), "{shared:?}");
+    assert!(saved.borrow().is_empty(), "nothing saved to Photos");
+    assert!(widget(&h, "panel:shareSheet").is_none(), "the sheet closes");
+    assert_eq!(h.app.session.last_export, None, "Export with Previous keeps what it had");
+}
+
+#[test]
+fn phone_save_to_photos_takes_only_the_photos_still_chosen() {
+    let (mut h, shared, saved) = phone_host(json!({"view": "photoGrid"}));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    click(&mut h, "icon:share");
+    assert!(widget(&h, "photo:share:2").is_some(), "the three selected photos");
+    click(&mut h, "photo:share:1");
+    click(&mut h, "button:shareSavePhotos");
+    finish_export(&mut h);
+    let saved = saved.borrow();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    assert_eq!(saved[0].len(), 2, "the photo taken out stays out: {saved:?}");
+    assert!(shared.borrow().is_empty(), "nothing offered to the share sheet");
+}
+
+#[test]
+fn phone_share_sheet_select_none_leaves_nothing_to_share() {
+    let (mut h, shared, _) = phone_host(json!({"view": "detail"}));
+    click(&mut h, "icon:share");
+    click(&mut h, "button:shareSelectAll");
+    click(&mut h, "button:shareNow");
+    assert!(h.app.export.is_none(), "no export without a photo");
+    assert!(widget(&h, "panel:shareSheet").is_some(), "the sheet stays");
+    assert!(shared.borrow().is_empty());
+}
+
+#[test]
+fn phone_export_as_more_options_opens_the_export_dialog() {
+    let (mut h, _, _) = phone_host(json!({"view": "detail"}));
+    let active = h.app.session.active().expect("a photo");
+    click(&mut h, "icon:share");
+    click(&mut h, "button:shareExportAs");
+    assert!(widget(&h, "combo:shareFormat").is_some(), "the Export as form");
+    assert!(widget(&h, "combo:shareSize").is_some() && widget(&h, "combo:shareQuality").is_some(), "JPEG: size and quality");
+    click(&mut h, "button:shareMoreOptions");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Export { .. })), "the full Export dialog");
+    assert_eq!(h.app.session.selection.ids, vec![active], "for the photos chosen");
+    assert!(widget(&h, "panel:shareSheet").is_none(), "the sheet gives way to it");
+}
+
+#[test]
+fn phone_save_to_photos_needs_a_host_that_can() {
+    let (mut h, _, _) = phone_host(json!({"view": "detail"}));
+    h.app.services.save_to_photos = None;
+    click(&mut h, "icon:share");
+    assert!(widget(&h, "button:shareNow").is_some());
+    assert!(widget(&h, "button:shareSavePhotos").is_none(), "no Save to Photos without the host's");
+}

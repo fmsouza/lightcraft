@@ -256,6 +256,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         // exports are downloads; the folder only names them
         export_dir: None,
         share: None,
+        save_to_photos: None,
         import_copies: false,
         // the browser reports prefers-color-scheme to egui
         system_theme: None,

@@ -141,6 +141,16 @@ orientation, iPad Split View and phone browsers:
   over `content://` URIs from a small read-only `FilesProvider` (androidx's FileProvider
   without androidx). `ui-egui` gained two optional host services for this, `export_dir` and
   `share`.
+- **Share sheet (phone layout):** the Share button (the editor's, the library's and Select
+  mode's) opens a sheet of the photos to share, each with a check box (Select all / none), and:
+  **Share**, a full-size sRGB JPEG straight to the system share sheet; **Export as**, a short
+  form (file type: Original, JPG, AVIF, JXL, TIF, PNG, DNG; size; quality; the watermark set in
+  the full Export dialog), whose More options opens that dialog for the chosen photos; and
+  **Save to Photos**, straight into the photo library, its gear setting what is saved. On iOS
+  that's a PhotoKit creation request per file (`src/ios_photos.rs`; add-only access,
+  `NSPhotoLibraryAddUsageDescription`); on Android, MediaStore into `Pictures/LightCraft`
+  (Android 10 and later). The sheet's exports leave Export with Previous as it was.
+  (`panels/share_sheet.rs`; host service `save_to_photos`.)
 - **Hardware keyboard (iPad):** shortcuts work from a Magic Keyboard or any Bluetooth keyboard,
   with ⌘ as the command key (menus show ⌘), plus arrows, Escape and the single-key shortcuts.
   winit 0.30's iOS view only receives typed text, so while no text field has focus a hidden view

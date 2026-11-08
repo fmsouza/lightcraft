@@ -340,6 +340,9 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Where the files of the next background export go once written (the phone Share sheet sets
+    /// it around its `app.export`); none: the share sheet, as for any export on a phone.
+    pub export_handoff: Option<export_task::Handoff>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

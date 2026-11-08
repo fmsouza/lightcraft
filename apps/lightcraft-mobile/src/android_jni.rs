@@ -140,6 +140,38 @@ pub fn share(app: &AndroidApp, paths: &[String]) {
     }
 }
 
+/// Save exported files to the gallery (Pictures/LightCraft); the outcome comes from [`take_saved`].
+pub fn save_to_gallery(app: &AndroidApp, paths: &[String]) {
+    let r = with_activity(app, |env, activity| {
+        let joined = env.new_string(paths.join("\n"))?;
+        env.call_method(activity, jni_str!("saveToGallery"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&joined)])?;
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::warn!("save to gallery: {e}");
+    }
+}
+
+/// Saves to the gallery finished since the last call: how many photos, or why it failed.
+pub fn take_saved(app: &AndroidApp) -> Vec<Result<usize, String>> {
+    let r = with_activity(app, |env, activity| {
+        let s = env.call_method(activity, jni_str!("takeSaved"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
+        if s.is_null() {
+            return Ok(String::new());
+        }
+        // SAFETY: takeSaved returns a String
+        unsafe { JString::from_raw(env, s.into_raw()) }.try_to_string(env)
+    });
+    let text = r.unwrap_or_else(|e| {
+        log::warn!("save to gallery: {e}");
+        String::new()
+    });
+    text.lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.strip_prefix('!').map_or_else(|| Ok(l.parse().unwrap_or(0)), |why| Err(why.to_string())))
+        .collect()
+}
+
 /// How far the copy of picked files is, while one runs: files copied, files to copy (0: not known
 /// yet), and the file being copied.
 pub fn copy_progress(app: &AndroidApp) -> Option<(u64, u64, String)> {

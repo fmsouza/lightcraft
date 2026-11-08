@@ -17,7 +17,18 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 
+/// Where a background export's files go once written (mobile hosts).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Handoff {
+    /// The system share sheet ([`crate::Services::share`]).
+    #[default]
+    Share,
+    /// The device's photo library ([`crate::Services::save_to_photos`]).
+    Photos,
+}
+
 pub struct ExportTask {
+    pub handoff: Handoff,
     pub total: usize,
     /// Photos started so far and the file in progress.
     pub progress: Arc<Mutex<(usize, String)>>,
@@ -81,7 +92,8 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard });
+    let handoff = app.export_handoff.unwrap_or_default();
+    app.export = Some(ExportTask { handoff, total, progress, cancel, rx, guard });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -128,7 +140,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { handoff: Handoff::Share, total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -181,7 +193,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { handoff: Handoff::Share, total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -272,6 +284,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
+            let handoff = task.handoff;
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
@@ -280,11 +293,15 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let m = export_summary(&files, photos.as_ref(), total, cancelled);
                     // mobile: offer what was written in the share sheet
                     let paths: Vec<String> = files.iter().filter_map(|f| f.get("path").and_then(Value::as_str)).map(str::to_string).collect();
+                    let hand = match handoff {
+                        Handoff::Share => app.services.share.as_mut(),
+                        Handoff::Photos => app.services.save_to_photos.as_mut(),
+                    };
                     if !cancelled
                         && !paths.is_empty()
-                        && let Some(share) = app.services.share.as_mut()
+                        && let Some(hand) = hand
                     {
-                        share(&paths);
+                        hand(&paths);
                     }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m

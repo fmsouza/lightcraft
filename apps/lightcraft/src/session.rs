@@ -246,6 +246,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         // exports go to ~/Pictures/LightCraft Exports; no share sheet on the desktop
         export_dir: None,
         share: None,
+        save_to_photos: None,
         import_copies: false,
         system_theme: appearance::service(),
     }

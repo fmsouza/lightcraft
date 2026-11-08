@@ -3882,6 +3882,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-photos",
  "objc2-photos-ui",
  "objc2-ui-kit 0.3.2",
  "raw-window-handle",
@@ -4762,6 +4763,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6ea9a706f18e32cf8a0723e99855af4f135282891e07259301bae9135ae3872"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
 ]

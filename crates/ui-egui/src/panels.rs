@@ -27,6 +27,7 @@ pub mod presets;
 pub mod profiles;
 pub mod right;
 pub mod second;
+pub mod share_sheet;
 pub mod slideshow;
 pub mod strip;
 pub mod topbar;

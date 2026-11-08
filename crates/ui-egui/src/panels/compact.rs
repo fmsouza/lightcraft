@@ -140,6 +140,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // (in landscape the editor's sheet is part of the tool column, drawn by `tool_dock`)
         sheet(app, ui);
     }
+    super::share_sheet::show(app, ui.ctx());
 }
 
 /// A bar along the top with the safe-area and margins of the compact layout.
@@ -244,8 +245,8 @@ fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("view.back", json!({}));
         }
         bar_right(app, ui, false, |app, right| {
-            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Export").clicked() {
-                let _ = app.run("dialog.export", json!({}));
+            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Share").clicked() {
+                super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
             }
             let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
             if icon_button(right, "filter", Icon::Filter, BUTTON, filtering, true, "Filter bar").clicked() {
@@ -311,8 +312,8 @@ fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("view.back", json!({}));
         }
         bar_right(app, ui, true, |app, right| {
-            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Export").clicked() {
-                let _ = app.run("dialog.export", json!({}));
+            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Share").clicked() {
+                super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, true));
             }
             if undo_button(right, "redo", "Redo", true).clicked() {
                 let _ = app.run("edit.redo", json!({}));
@@ -405,7 +406,7 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Select mode's bar: how many photos are selected, then Share (export), Album, Move to Folder,
+/// Select mode's bar: how many photos are selected, then Share (the Share sheet), Album, Move to Folder,
 /// Delete, and Done (leaves Select mode).
 fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -439,8 +440,8 @@ fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
             egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
         }
-        if icon_button(&mut right, "selectShare", Icon::Share, BUTTON, false, any, "Export").clicked() {
-            let _ = app.run("dialog.export", json!({}));
+        if icon_button(&mut right, "selectShare", Icon::Share, BUTTON, false, any, "Share").clicked() {
+            super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
         }
     });
 }

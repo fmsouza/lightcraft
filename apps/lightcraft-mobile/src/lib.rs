@@ -24,6 +24,8 @@ mod ios_keys;
 #[cfg(target_os = "ios")]
 mod ios_pencil;
 #[cfg(target_os = "ios")]
+mod ios_photos;
+#[cfg(target_os = "ios")]
 mod ios_picker;
 #[cfg(target_os = "ios")]
 mod ios_scene;
@@ -123,6 +125,25 @@ impl App {
     /// Picked files being copied into the app (the photo picker's, a folder's): a row in the
     /// activity stack with the count and the file, whose ✕ stops the copy after the current file
     /// (what was copied is imported).
+    /// Report the Share sheet's saves to the photo library once the system has answered.
+    fn photos_saved(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "ios")]
+        let done = ios_photos::take_results();
+        #[cfg(target_os = "android")]
+        let done = ANDROID_APP.get().map(android_jni::take_saved).unwrap_or_default();
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        let done: Vec<Result<usize, String>> = Vec::new();
+        for r in done {
+            let msg = match r {
+                Ok(1) => lightcraft_ui_egui::i18n::tr("Saved to Photos").to_string(),
+                Ok(n) => format!("{} {n}", lightcraft_ui_egui::i18n::tr("Photos saved:")),
+                Err(why) => format!("{} {why}", lightcraft_ui_egui::i18n::tr("Couldn't save to Photos:")),
+            };
+            log::info!("{msg}");
+            self.app.toast(ctx, msg);
+        }
+    }
+
     #[cfg(target_os = "android")]
     fn copy_row(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
@@ -311,6 +332,7 @@ impl eframe::App for App {
         }
         #[cfg(target_os = "android")]
         self.copy_row(ctx);
+        self.photos_saved(ctx);
         memory::poll(&mut self.app.session);
         self.app.logic(ctx);
         // the settings, a few seconds after a change (a phone may stop the app without asking)
@@ -370,7 +392,9 @@ impl eframe::App for App {
 
 /// `export_dir`: where exports go by default (next to the library, inside the sandbox; on iOS
 /// `Documents/`, so they show in the Files app too).
-fn services(export_dir: String) -> Services {
+fn services(export_dir: String, ctx: &egui::Context) -> Services {
+    #[cfg(not(target_os = "ios"))]
+    let _ = ctx;
     let saves = std::path::PathBuf::from(&export_dir);
     Services {
         export_dir: Some(export_dir),
@@ -381,6 +405,18 @@ fn services(export_dir: String) -> Services {
         share: Some(Box::new(|paths: &[String]| {
             if let Some(app) = ANDROID_APP.get() {
                 android_jni::share(app, paths);
+            }
+        })),
+        // the Share sheet's Save to Photos: straight into the photo library (the gallery)
+        #[cfg(target_os = "ios")]
+        save_to_photos: Some(Box::new({
+            let ctx = ctx.clone();
+            move |paths: &[String]| ios_photos::save(paths, ctx.clone())
+        })),
+        #[cfg(target_os = "android")]
+        save_to_photos: Some(Box::new(|paths: &[String]| {
+            if let Some(app) = ANDROID_APP.get() {
+                android_jni::save_to_gallery(app, paths);
             }
         })),
         // atomic (temp file + sync + rename), inside the sandbox
@@ -611,7 +647,7 @@ pub fn run(mut options: eframe::NativeOptions, library_dir: std::path::PathBuf, 
             let fresh = || Session::new().with_fs().with_system_clock().with_models_in(&data_dir);
             let (mut s, problem) = lightcraft_ui_egui::panels::library_problem::open_or_problem(fresh, &library_dir, true);
             memory::configure(&mut s, &_cc.egui_ctx);
-            let mut app = LightcraftApp::new(s, services(export_dir));
+            let mut app = LightcraftApp::new(s, services(export_dir, &_cc.egui_ctx));
             app.library_problem = problem;
             // the settings saved last time (language, shortcuts, panels …)
             let (prefs, saved, warning) = lightcraft_ui_egui::prefs::UiPrefs::load(data_dir.join("ui.json"));

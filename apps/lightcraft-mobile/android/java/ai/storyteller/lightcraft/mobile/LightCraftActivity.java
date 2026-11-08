@@ -2,6 +2,7 @@ package ai.storyteller.lightcraft.mobile;
 
 import android.app.NativeActivity;
 import android.content.ClipData;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -11,6 +12,7 @@ import android.os.Build;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.webkit.MimeTypeMap;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import java.io.File;
@@ -170,6 +172,77 @@ public class LightCraftActivity extends NativeActivity {
                 startActivity(Intent.createChooser(send, null));
             }
         });
+    }
+
+    /** How the last saves to the gallery went ("N" photos saved, or "!why"), taken by {@link #takeSaved}. */
+    private final ArrayList<String> saved = new ArrayList<>();
+
+    /**
+     * Save exported files (newline-separated paths) to the gallery, in Pictures/LightCraft, on a
+     * worker thread. MediaStore needs no permission for that from Android 10; older versions are
+     * told to use Share instead.
+     */
+    public void saveToGallery(final String joined) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String result;
+                if (Build.VERSION.SDK_INT < 29) {
+                    result = "!Saving to the gallery needs Android 10 or later: use Share instead";
+                } else {
+                    int n = 0;
+                    String error = null;
+                    for (String path : joined.split("\n")) {
+                        if (path.isEmpty() || path.endsWith(".xmp")) continue;
+                        try {
+                            addToGallery(new File(path));
+                            n++;
+                        } catch (Exception e) {
+                            error = e.getMessage();
+                        }
+                    }
+                    result = error == null ? Integer.toString(n) : "!" + error;
+                }
+                synchronized (saved) {
+                    saved.add(result);
+                }
+                nativeWake();
+            }
+        }).start();
+    }
+
+    private void addToGallery(File file) throws Exception {
+        String name = file.getName();
+        String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase() : "";
+        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        ContentValues v = new ContentValues();
+        v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+        v.put(MediaStore.Images.Media.MIME_TYPE, mime == null ? "image/*" : mime);
+        v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/LightCraft");
+        v.put(MediaStore.Images.Media.IS_PENDING, 1);
+        Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+        if (uri == null) throw new Exception("the gallery refused " + name);
+        try (InputStream in = new java.io.FileInputStream(file); OutputStream os = getContentResolver().openOutputStream(uri)) {
+            if (os == null) throw new java.io.IOException("the gallery can't be written");
+            byte[] buf = new byte[1 << 16];
+            for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+        } catch (Exception e) {
+            getContentResolver().delete(uri, null, null);
+            throw e;
+        }
+        v.clear();
+        v.put(MediaStore.Images.Media.IS_PENDING, 0);
+        getContentResolver().update(uri, v, null, null);
+    }
+
+    /** The saves finished since the last call, newline-separated (empty: none). */
+    public String takeSaved() {
+        synchronized (saved) {
+            StringBuilder b = new StringBuilder();
+            for (String s : saved) b.append(s).append('\n');
+            saved.clear();
+            return b.toString();
+        }
     }
 
     private volatile TextInput textInput;
