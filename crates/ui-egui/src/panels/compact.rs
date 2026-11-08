@@ -183,6 +183,7 @@ const EDITOR_MORE: &[(&str, &str)] = &[
 /// What "…" offers in the library.
 const LIBRARY_MORE: &[(&str, &str)] = &[
     ("file.addFolder", "Import from Files…"),
+    ("view.selectMode", "Select Photos"),
     ("library.selectAll", "Select All"),
     ("app.settings", "Settings…"),
     ("app.about", "About LightCraft"),
@@ -487,37 +488,17 @@ fn undo_button(ui: &mut egui::Ui, id: &str, tip: &str, redo: bool) -> egui::Resp
     r
 }
 
-/// The library's bottom bar: the grid sizes and Detail, Sort and Select (a tap on a photo opens
-/// the editor, so there is no Edit button). In Select mode by finger it is the selection's bar instead
-/// ([`select_bar`]).
+/// The library's bottom bar on a phone: only Select mode's ([`select_bar`]). Otherwise there is
+/// none: a pinch sets the grid's size, a tap on a photo opens the editor, a long press (or "…" →
+/// Select Photos) starts Select mode, and Sort sits on the album row.
 fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    if app.ui.select_mode && crate::widgets::touch_screen(ui.ctx()) {
+    if app.ui.select_mode {
         egui::Panel::bottom("bottom_bar")
             .exact_size(t.bottom_bar_h + 4.0)
             .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN + 6, right: BAR_MARGIN, top: 0, bottom: 0 }))
             .show(ui, |ui| select_bar(app, ui));
-        return;
     }
-    egui::Panel::bottom("bottom_bar")
-        .exact_size(t.bottom_bar_h + 4.0)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN, right: BAR_MARGIN, top: 0, bottom: 0 }))
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for (id, icon, mode, tip) in [
-                    ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
-                    ("squareGrid", Icon::GridSquare, ViewMode::SquareGrid, "Square Grid (G toggles)"),
-                    ("detail", Icon::Single, ViewMode::Detail, "Detail (D)"),
-                ] {
-                    if icon_button(ui, id, icon, BUTTON, app.ui.view == mode, true, tip).clicked() {
-                        let _ = app.run(&format!("view.{id}"), json!({}));
-                    }
-                }
-                // (Sort is on the grid's album row, by Filter)
-                super::bottombar::select_mode_button(app, ui);
-            });
-        });
 }
 
 /// Select mode's bar: how many photos are selected, then Share (the Share sheet), Album, Move to Folder,

@@ -76,7 +76,7 @@ const MAX_FOLLOWED: usize = 4096;
 pub struct GridCache {
     runs: Option<(RunsKey, Arc<Vec<DateRun>>)>,
     /// Layout by (runs key, width, thumbnail size, square).
-    layout: Option<((RunsKey, u32, u32, bool), Arc<GridLayout>)>,
+    layout: Option<((RunsKey, u32, u32, bool, bool), Arc<GridLayout>)>,
     /// Stack index by generation.
     stacks: Option<(u64, Arc<StackIndex>)>,
     /// How many of the photos are browsed (Local) ones, by generation.
@@ -390,7 +390,10 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let runs = app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key, square);
     // the layout only changes with the photos (and their shapes), the grouping, the width and
     // the thumbnail size
-    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square);
+    // a phone stretches a date group's last row across the screen (up to [`PHONE_STRETCH`] times
+    // the row height), so a month doesn't end in a half-empty row
+    let stretch = if compact { PHONE_STRETCH } else { 1.0 };
+    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square, compact);
     let lay = match &app.caches.grid.layout {
         Some((k, l)) if *k == lay_key => l.clone(),
         _ => {
@@ -403,7 +406,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 app.caches.grid.shapes()
             };
             let spans: Vec<(usize, usize)> = runs.iter().map(|r| (r.start, r.count)).collect();
-            let l = Arc::new(layout(shapes, &spans, avail_w, target, square));
+            let l = Arc::new(layout_stretched(shapes, &spans, avail_w, target, square, stretch));
             app.caches.grid.layout = Some((lay_key, l.clone()));
             l
         }
@@ -622,6 +625,16 @@ pub fn resolve_group(by: GroupBy, thumb_size: f32) -> GroupBy {
 /// below its header. Justified rows fill the width exactly except a group's last row, which keeps
 /// the target height.
 pub fn layout(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: f32, square: bool) -> GridLayout {
+    layout_stretched(aspects, groups, avail_w, target, square, 1.0)
+}
+
+/// How much taller than the others a date group's last row may grow on a phone to fill the width.
+/// A month of one or two photos that would need more keeps its short row instead of one huge photo.
+pub const PHONE_STRETCH: f32 = 1.8;
+
+/// [`layout`], but a group's last justified row also fills the width when that makes it at most
+/// `max_stretch` times the target height (1: only when it would be shorter, as [`layout`]).
+pub fn layout_stretched(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: f32, square: bool, max_stretch: f32) -> GridLayout {
     let n = aspects.len();
     let whole = [(0, n)];
     let (groups, headed) = if groups.is_empty() { (&whole[..], false) } else { (groups, true) };
@@ -667,7 +680,7 @@ pub fn layout(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: 
                     }
                 }
                 let row_h = (avail_w - gap * (j - i - 1) as f32) / sum;
-                let h = if j < end || row_h <= target { row_h } else { target };
+                let h = if j < end || row_h <= target * max_stretch { row_h } else { target };
                 let mut x = 4.0;
                 for k in i..j {
                     let w = aspects[k].max(0.05) * h;
@@ -1856,6 +1869,22 @@ mod tests {
         let last = l.cells.last().unwrap();
         assert!(last.right() <= 604.0 + 0.5);
         assert!((l.height - (last.bottom() + 6.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn stretched_layout_fills_a_groups_last_row_within_reason() {
+        // group 1: five photos (a row of three, then two), group 2: one photo
+        let aspects = [1.5, 1.5, 1.5, 1.5, 1.5, 0.7];
+        let groups = [(0, 5), (5, 1)];
+        let plain = layout(&aspects, &groups, 400.0, 100.0, false);
+        let l = layout_stretched(&aspects, &groups, 400.0, 100.0, false, 1.8);
+        assert!(plain.cells[4].right() < 320.0, "plain: the last row stops short: {:?}", plain.cells[4]);
+        assert!((l.cells[4].right() - 404.0).abs() < 0.5, "stretched: it spans the width: {:?}", l.cells[4]);
+        assert!(l.cells[4].height() <= 180.0);
+        assert_eq!(l.headers.len(), 2, "the headers stay rows of their own");
+        assert!(l.cells[5].top() >= l.headers[1].bottom(), "group 2 below its header");
+        // a lone portrait photo would be ~570 pt tall across 400 pt: it keeps the target height
+        assert!((l.cells[5].height() - 100.0).abs() < 0.01, "{:?}", l.cells[5]);
     }
 
     #[test]

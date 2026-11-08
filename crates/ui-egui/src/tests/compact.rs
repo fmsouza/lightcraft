@@ -1078,3 +1078,25 @@ fn phone_search_text_is_centred_in_its_field_on_a_touch_screen() {
     assert!((text.center().y - bar.center().y).abs() < 1.5, "text box {text:?} centred on the bar {bar:?}");
     assert!(text.height() < 30.0, "one line, not a finger-sized box: {text:?}");
 }
+
+#[test]
+fn phone_library_has_no_bottom_bar_but_select_mode_keeps_its_own() {
+    let mut h = grid_phone();
+    for id in ["icon:photoGrid", "icon:squareGrid", "icon:detail", "button:selectMode"] {
+        assert!(widget(&h, id).is_none(), "{id}: a pinch sizes the grid, a long press selects");
+    }
+    let more = h.request("ui.clickWidget", json!({"id": "icon:more"}), T);
+    assert_eq!(more["ok"], true, "{more}");
+    h.step();
+    click(&mut h, "more:view.selectMode");
+    assert!(h.app.ui.select_mode, "… → Select Photos");
+    assert!(widget(&h, "icon:selectShare").is_some(), "Select mode's bar");
+}
+
+#[test]
+fn phone_grid_months_are_heading_rows_without_half_empty_rows() {
+    let h = demo(PHONE, json!({"view": "photoGrid", "right": "none", "sort": {"group": "month"}}));
+    let headers: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("group:")).map(|(_, r)| *r).collect();
+    assert!(headers.len() >= 2, "a heading per month on screen: {headers:?}");
+    assert!(headers.iter().all(|r| r.width() > PHONE[0] * 0.8), "headings are full-width rows: {headers:?}");
+}
