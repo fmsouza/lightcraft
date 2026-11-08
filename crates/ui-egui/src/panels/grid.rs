@@ -309,12 +309,19 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.painter().rect_filled(hr, 0.0, t.canvas);
             let full = crate::i18n::source_title(&app.session);
             let count_w = ui.painter().layout_no_wrap(cnt.clone(), t.font(12.5), t.text_dim).size().x;
+            // a phone puts Filter and Sort at the row's right end, after the count
+            let tools_w = if super::compact::is_compact(ui.ctx()) { super::compact::ALBUM_TOOLS_W } else { 0.0 };
+            let right = if tools_w > 0.0 { hr.right() - tools_w - 10.0 } else { hr.right() - 20.0 };
             // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+            let room = (right - hr.left() - 20.0 - count_w - 16.0).max(0.0);
             let font = t.semibold(17.0);
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
-            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
+            let count_rect = ui.painter().text(pos2(right, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
+            if tools_w > 0.0 {
+                let tools = Rect::from_min_max(pos2(hr.right() - tools_w - 4.0, hr.top()), pos2(hr.right() - 4.0, hr.bottom()));
+                super::compact::album_tools(app, ui, tools);
+            }
             crate::widgets::register(ui, "grid:title", title_rect);
             crate::widgets::register(ui, "grid:count", count_rect);
             if title != full {
@@ -323,7 +330,8 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     super::chips::show(app, ui, &chips);
-    if app.ui.filter_bar {
+    // (a phone has the Filter sheet instead)
+    if app.ui.filter_bar && !super::compact::is_compact(ui.ctx()) {
         super::filterbar::show(app, ui);
     }
     app.canvas_rect = Some(ui.max_rect());

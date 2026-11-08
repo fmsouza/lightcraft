@@ -141,6 +141,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         sheet(app, ui);
     }
     super::share_sheet::show(app, ui.ctx());
+    super::filter_sheet::show(app, ui.ctx());
 }
 
 /// A bar along the top with the safe-area and margins of the compact layout.
@@ -231,9 +232,37 @@ fn unsaved_indicator(app: &LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The library's bar: My Photos, then (from the right) "…", Export, Filter, Import and the
-/// search field in what's left.
+/// The library's bar: My Photos, then (from the right) "…", Share, Filter, Import and the search
+/// field in what's left. While the search is being typed in, the field takes the whole bar with
+/// Cancel after it, as a phone's search does.
 fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if search_open(ui.ctx()) {
+        top_bar(ui, |ui| {
+            let rest = ui.available_rect_before_wrap();
+            let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            let t = Tokens::get(ui.ctx());
+            let cancel = right.add(
+                egui::Button::new(egui::RichText::new(crate::i18n::tr("Cancel")).font(t.font(15.0)).color(t.accent))
+                    .frame(false)
+                    .min_size(vec2(64.0, 40.0)),
+            );
+            register(&right, "button:searchCancel", cancel.rect);
+            if cancel.clicked() {
+                // as on a phone: Cancel drops the search and puts the keyboard away
+                set_search_open(ui.ctx(), false);
+                right.memory_mut(|m| m.surrender_focus(crate::text_field::id("field:search")));
+                if !app.ui.search.is_empty() {
+                    app.ui.search.clear();
+                    let _ = app.run("library.filter", json!({"text": ""}));
+                }
+                return;
+            }
+            right.add_space(4.0);
+            let field = right.available_rect_before_wrap();
+            search(app, &mut right, Rect::from_center_size(field.center(), vec2(field.width(), 34.0)));
+        });
+        return;
+    }
     top_bar(ui, |ui| {
         if icon_button(ui, "sidebar", Icon::Sidebar, BUTTON, app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
             let _ = app.run("view.leftPanel", json!({}));
@@ -248,9 +277,9 @@ fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Share").clicked() {
                 super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
             }
-            let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
-            if icon_button(right, "filter", Icon::Filter, BUTTON, filtering, true, "Filter bar").clicked() {
-                let _ = app.run("view.filterBar", json!({}));
+            // Filter sits on the album row; a folder's own header (Local) has no room for it
+            if !album_row(app) {
+                filter_button(app, right);
             }
             // the system photo picker (or the Files app's) on a phone; the file dialog elsewhere
             if icon_button(right, "import", Icon::Plus, BUTTON, false, true, "Import Photos…").clicked()
@@ -262,13 +291,76 @@ fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             right.add_space(4.0);
             let field = right.available_rect_before_wrap();
             if field.width() >= 80.0 {
-                search(app, right, Rect::from_center_size(field.center(), vec2(field.width(), 32.0)));
+                search(app, right, Rect::from_center_size(field.center(), vec2(field.width(), 34.0)));
             }
         });
     });
 }
 
-/// The search field in `r` (same id and command as the desktop top bar's).
+/// Width of Filter and Sort at the right of the album row ([`album_tools`]).
+pub const ALBUM_TOOLS_W: f32 = 2.0 * BUTTON.x + 4.0;
+
+/// Whether the grid's header is the album row (title and count), which carries Filter and Sort,
+/// rather than a Local folder's path bar.
+fn album_row(app: &LightcraftApp) -> bool {
+    app.session.browse.is_none() || app.session.source != lightcraft_engine::LibrarySource::Folder
+}
+
+/// Filter, with the number of filters on as a badge; it opens the Filter sheet.
+fn filter_button(app: &LightcraftApp, ui: &mut egui::Ui) {
+    let on = super::filter_sheet::active_count(app);
+    let filter = icon_button(ui, "filter", Icon::Filter, BUTTON, on > 0, true, "Filter");
+    if on > 0 {
+        badge(ui, filter.rect, on);
+    }
+    if filter.clicked() {
+        super::filter_sheet::open(ui.ctx());
+    }
+}
+
+/// Filter and Sort at the right end of the grid's album row, `r` ([`ALBUM_TOOLS_W`] wide), next to
+/// what they act on.
+pub fn album_tools(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    row.spacing_mut().item_spacing.x = 4.0;
+    let sort = icon_button(&mut row, "sort", Icon::Sort, BUTTON, false, true, "Sort");
+    egui::Popup::menu(&sort).show(|ui| super::bottombar::sort_menu(app, ui));
+    filter_button(app, &mut row);
+}
+
+/// How many filters are on, as a small dot with the number at the top right of `r`.
+fn badge(ui: &egui::Ui, r: Rect, n: usize) {
+    let t = Tokens::get(ui.ctx());
+    let c = pos2(r.center().x + 11.0, r.center().y - 11.0);
+    ui.painter().circle(c, 8.0, t.accent, Stroke::new(1.5, t.chrome));
+    let text = if n > 9 { "9+".to_string() } else { n.to_string() };
+    ui.painter().text(c, egui::Align2::CENTER_CENTER, text, t.semibold(10.0), egui::Color32::WHITE);
+    register(ui, "indicator:filterCount", Rect::from_center_size(c, vec2(16.0, 16.0)));
+}
+
+fn search_open_id() -> egui::Id {
+    egui::Id::unique("compact-search-open")
+}
+
+/// Whether the search takes the whole bar: from when its field gets the keyboard until it gives it
+/// up (Return, a tap elsewhere) or Cancel. The flag outlives the frame the field loses focus on,
+/// so a tap on Cancel (which takes the focus as the finger goes down) still lands on Cancel.
+fn search_open(ctx: &egui::Context) -> bool {
+    let focused = ctx.memory(|m| m.has_focus(crate::text_field::id("field:search")));
+    let was = ctx.data(|d| d.get_temp::<bool>(search_open_id())).unwrap_or(false);
+    let open = focused || (was && ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()));
+    if open != was {
+        set_search_open(ctx, open);
+    }
+    open
+}
+
+fn set_search_open(ctx: &egui::Context, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(search_open_id(), open));
+}
+
+/// The search field in `r` (same id and command as the desktop top bar's): the magnifier, the text
+/// and, once there is some, ✕ to clear it.
 fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     let id = crate::text_field::id("field:search");
@@ -278,27 +370,50 @@ fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let focused = ui.memory(|m| m.has_focus(id));
     ui.painter().rect(
         r,
-        6.0,
+        17.0,
         if focused { t.canvas } else { t.field },
         Stroke::new(1.0, if focused { t.accent } else { t.field_border }),
         StrokeKind::Inside,
     );
-    let inner = r.shrink2(vec2(10.0, 4.0));
-    if app.ui.search.is_empty() && !focused {
-        paint(ui.painter(), Rect::from_min_size(pos2(inner.left(), r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
+    let inner = r.shrink2(vec2(12.0, 4.0));
+    paint(ui.painter(), Rect::from_min_size(pos2(inner.left(), r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
+    let has_text = !app.ui.search.is_empty();
+    let clear_r = Rect::from_center_size(pos2(r.right() - 17.0, r.center().y), vec2(34.0, 34.0));
+    let right = if has_text { clear_r.left() } else { inner.right() };
+    // one line tall and centred in the field: a touch screen's finger-sized controls would make the
+    // text box taller than the field and set its text (and the hint) above the magnifier
+    let font = t.font(15.0);
+    let line = ui.painter().layout_no_wrap("Ag".to_string(), font.clone(), t.text).size().y;
+    let text = Rect::from_min_max(pos2(inner.left() + 24.0, r.center().y - line / 2.0), pos2(right, r.center().y + line / 2.0));
+    let mut cleared = false;
+    if has_text {
+        let resp = ui.interact(clear_r, ui.scope_id().with("search-clear"), Sense::click());
+        register(ui, "button:searchClear", clear_r);
+        let p = ui.painter();
+        p.circle_filled(clear_r.center(), 8.0, t.text_dim);
+        paint(p, Rect::from_center_size(clear_r.center(), vec2(10.0, 10.0)), Icon::Close, t.field);
+        if resp.clicked() {
+            app.ui.search.clear();
+            cleared = true;
+        }
     }
-    let text = Rect::from_min_max(pos2(inner.left() + 22.0, inner.top()), inner.max);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.spacing_mut().interact_size.y = line;
     // (registered as `field:search` by the field itself, like the desktop's)
     let resp = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
         .frame(false)
-        .hint(crate::i18n::tr("Search"))
+        .margin(egui::Margin::ZERO)
+        .hint(crate::i18n::tr("Search photos"))
         .width(text.width())
-        .font(t.font(14.0))
+        .font(font)
         .text_color(t.text)
         .show(&mut child)
         .response;
-    if resp.changed() {
+    if cleared {
+        // after the field, which gives the keyboard up on a tap outside it (the ✕ is outside)
+        ui.memory_mut(|m| m.request_focus(id));
+    }
+    if resp.changed() || cleared {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));
     }
@@ -399,8 +514,7 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let _ = app.run(&format!("view.{id}"), json!({}));
                     }
                 }
-                let sort = icon_button(ui, "sort", Icon::Sort, BUTTON, false, true, "Sort");
-                egui::Popup::menu(&sort).show(|ui| super::bottombar::sort_menu(app, ui));
+                // (Sort is on the grid's album row, by Filter)
                 super::bottombar::select_mode_button(app, ui);
             });
         });

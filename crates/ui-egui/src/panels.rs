@@ -10,6 +10,7 @@ pub mod denoise;
 pub mod detail;
 pub mod edit;
 pub mod empty_library;
+pub mod filter_sheet;
 pub mod filterbar;
 pub mod grid;
 pub mod histogram;

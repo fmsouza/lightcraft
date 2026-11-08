@@ -470,8 +470,10 @@ fn phone_landscape_dialogs_keep_a_readable_width() {
 }
 
 #[test]
-fn phone_width_filter_bar_wraps_every_control_onto_the_screen() {
-    let mut h = demo(PHONE, json!({"view": "photoGrid", "filterBar": true}));
+fn narrow_window_filter_bar_wraps_every_control_onto_the_screen() {
+    // narrower than the bar's one- and two-row layouts, wider than a phone (which has the Filter sheet)
+    const NARROW: [f32; 2] = [700.0, 874.0];
+    let mut h = demo(NARROW, json!({"view": "photoGrid", "filterBar": true}));
     for _ in 0..4 {
         h.step();
     }
@@ -485,7 +487,7 @@ fn phone_width_filter_bar_wraps_every_control_onto_the_screen() {
     // stars, flags, labels, kind, edited, camera, lens, keyword, save, clear, presets
     assert!(controls.len() >= 20, "{controls:?}");
     for (id, r) in &controls {
-        assert!(r.left() >= 0.0 && r.right() <= PHONE[0], "{id} is on screen: {r:?}");
+        assert!(r.left() >= 0.0 && r.right() <= NARROW[0], "{id} is on screen: {r:?}");
     }
     let bar = widget(&h, "filterbar").expect("the bar");
     assert!(controls.iter().all(|(_, r)| bar.contains_rect(*r)), "inside the bar {bar:?}: {controls:?}");
@@ -937,4 +939,142 @@ fn phone_save_to_photos_needs_a_host_that_can() {
     click(&mut h, "icon:share");
     assert!(widget(&h, "button:shareNow").is_some());
     assert!(widget(&h, "button:shareSavePhotos").is_none(), "no Save to Photos without the host's");
+}
+
+fn grid_phone() -> Headless {
+    demo(PHONE, json!({"view": "photoGrid", "right": "none"}))
+}
+
+fn type_text(h: &mut Headless, text: &str) {
+    let r = h.request("ui.text", json!({"text": text}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+}
+
+#[test]
+fn phone_filter_opens_a_sheet_not_the_desktop_bar() {
+    let mut h = grid_phone();
+    click(&mut h, "icon:filter");
+    assert!(widget(&h, "panel:filterSheet").is_some(), "the Filter sheet");
+    assert!(!h.app.ui.filter_bar, "not the desktop filter bar");
+    assert!(widget(&h, "filterbar").is_none());
+    // a desktop session's filter bar left on stays hidden on a phone
+    h.app.ui.filter_bar = true;
+    h.step();
+    h.step();
+    assert!(widget(&h, "filterbar").is_none());
+}
+
+#[test]
+fn phone_filter_sheet_filters_as_it_is_tapped() {
+    let mut h = grid_phone();
+    let all = h.app.session.visible().len();
+    click(&mut h, "icon:filter");
+    click(&mut h, "sheetFilter:rating-3");
+    assert_eq!(h.app.session.filter.rating, 3);
+    click(&mut h, "sheetFilter:ratingOp-exactly");
+    assert_eq!(h.app.session.filter.rating_op, lightcraft_catalog::RatingOp::Exactly);
+    click(&mut h, "sheetFilter:rating-3");
+    assert_eq!(h.app.session.filter.rating, 0, "the lit last star again: any rating");
+    click(&mut h, "sheetFilter:flag-pick");
+    click(&mut h, "sheetFilter:flag-none");
+    assert_eq!(h.app.session.filter.flags, vec![lightcraft_catalog::Flag::Pick, lightcraft_catalog::Flag::None]);
+    click(&mut h, "sheetFilter:label-red");
+    assert_eq!(h.app.session.filter.labels, vec![lightcraft_catalog::ColorLabel::Red]);
+    click(&mut h, "sheetFilter:kind-raw");
+    assert_eq!(h.app.session.filter.kind, Some(lightcraft_catalog::MediaKind::Raw));
+    click(&mut h, "sheetFilter:kind-panorama");
+    assert_eq!((h.app.session.filter.kind, h.app.session.filter.merged.as_deref()), (None, Some("panorama")));
+    click(&mut h, "sheetFilter:kind-all");
+    click(&mut h, "sheetFilter:edited-edited");
+    assert_eq!(h.app.session.filter.edited, Some(true));
+    assert!(h.app.session.visible().len() < all);
+    assert_eq!(crate::panels::filter_sheet::active_count(&h.app), 3, "flags, label, edited");
+    assert!(widget(&h, "indicator:filterCount").is_some(), "the Filter button's badge");
+    click(&mut h, "button:filterSheetDone");
+    assert!(widget(&h, "panel:filterSheet").is_none(), "Show N photos closes the sheet");
+    assert_eq!(h.app.session.filter.edited, Some(true), "and keeps the filter");
+}
+
+#[test]
+fn phone_filter_sheet_picks_a_camera_from_its_list() {
+    let mut h = grid_phone();
+    click(&mut h, "icon:filter");
+    click(&mut h, "sheetFilter:camera");
+    assert!(widget(&h, "sheetFilter:camera-any").is_some(), "the camera list");
+    click(&mut h, "sheetFilter:camera-0");
+    let camera = h.app.session.filter.camera.clone().expect("a camera");
+    assert!(widget(&h, "sheetFilter:rating-1").is_some(), "back on the filters");
+    click(&mut h, "sheetFilter:camera");
+    click(&mut h, "sheetFilter:camera-any");
+    assert_eq!(h.app.session.filter.camera, None, "Any camera clears {camera}");
+}
+
+#[test]
+fn phone_filter_reset_keeps_the_search() {
+    let mut h = grid_phone();
+    assert!(h.app.run("library.filter", json!({"text": "sun", "rating": 2})).is_ok());
+    h.step();
+    click(&mut h, "icon:filter");
+    click(&mut h, "button:filterSheetReset");
+    assert_eq!(h.app.session.filter.rating, 0);
+    assert_eq!(h.app.session.filter.text, "sun", "the search has its own ✕");
+}
+
+#[test]
+fn phone_search_takes_the_bar_and_cancel_drops_it() {
+    let mut h = grid_phone();
+    let all = h.app.session.visible().len();
+    focus(&mut h, "field:search");
+    assert!(widget(&h, "button:searchCancel").is_some(), "Cancel while typing");
+    assert!(widget(&h, "icon:import").is_none(), "the field takes the whole bar");
+    type_text(&mut h, "sun");
+    assert_eq!(h.app.session.filter.text, "sun");
+    assert!(h.app.session.visible().len() < all);
+    click(&mut h, "button:searchCancel");
+    assert_eq!(h.app.session.filter.text, "", "Cancel drops the search");
+    assert!(h.app.ui.search.is_empty());
+    assert!(widget(&h, "icon:import").is_some(), "the bar's buttons are back");
+    assert_eq!(h.app.session.visible().len(), all);
+}
+
+#[test]
+fn phone_search_clear_button_empties_the_field() {
+    let mut h = grid_phone();
+    focus(&mut h, "field:search");
+    assert!(widget(&h, "button:searchClear").is_none(), "no ✕ on an empty field");
+    type_text(&mut h, "sun");
+    click(&mut h, "button:searchClear");
+    assert_eq!(h.app.session.filter.text, "");
+    assert!(widget(&h, "button:searchCancel").is_some(), "still searching");
+}
+
+#[test]
+fn phone_album_row_carries_filter_and_sort() {
+    let mut h = grid_phone();
+    let title = widget(&h, "grid:title").expect("the album row");
+    for id in ["icon:filter", "icon:sort"] {
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
+        assert!((r.center().y - title.center().y).abs() < 4.0, "{id} on the album row: {r:?} vs {title:?}");
+        assert!(r.right() <= PHONE[0], "{id} on screen");
+    }
+    let count = widget(&h, "grid:count").expect("the count");
+    assert!(count.right() <= widget(&h, "icon:filter").expect("filter").left(), "the count before them");
+    click(&mut h, "icon:filter");
+    assert!(widget(&h, "panel:filterSheet").is_some());
+}
+
+#[test]
+fn phone_search_text_is_centred_in_its_field_on_a_touch_screen() {
+    let mut h = grid_phone();
+    touch_screen(&mut h);
+    for _ in 0..3 {
+        h.step();
+    }
+    // the field registers its text box; the bar draws the rounded field around it
+    let text = widget(&h, "field:search").expect("the search field");
+    let bar = widget(&h, "icon:sidebar").expect("the bar's first button");
+    assert!((text.center().y - bar.center().y).abs() < 1.5, "text box {text:?} centred on the bar {bar:?}");
+    assert!(text.height() < 30.0, "one line, not a finger-sized box: {text:?}");
 }
