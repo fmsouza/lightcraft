@@ -43,8 +43,11 @@ If `cargo` on `PATH` isn't rustup's, set `CARGO` (for example
 ## Phone layout
 
 Below 600pt of width or 500pt of height (inside the safe area), `lightcraft-ui-egui` switches to
-a compact layout (`crates/ui-egui/src/panels/compact.rs`). It's used on phones in either
-orientation, iPad Split View and phone browsers:
+a compact layout (`crates/ui-egui/src/panels/compact.rs`). It's used on phones, iPad Split View
+and phone browsers. Phones stay in portrait, as phone photo editors do (held sideways the notch
+cuts into the photo): iOS lists only portrait for iPhone (`UISupportedInterfaceOrientations`),
+Android locks portrait when the screen is under 600 dp on its shortest side. iPads and Android
+tablets turn freely; the landscape arrangements below are theirs (and a short browser window's):
 
 - **Top bar:** My Photos, Back, Menu, a search field, Filter and Export.
 - **Detail view:** the photo on top, and a bottom sheet with a tool row (Presets, Edit, Crop,

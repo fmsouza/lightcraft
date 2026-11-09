@@ -4,11 +4,13 @@ import android.app.NativeActivity;
 import android.content.ClipData;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
@@ -40,6 +42,19 @@ import java.util.List;
  * file being copied: what was copied so far is delivered.
  */
 public class LightCraftActivity extends NativeActivity {
+    /**
+     * Phones stay upright, as phone photo editors do (held sideways the notch or camera cuts
+     * into the photo, and the layout is made for portrait); tablets turn freely. A phone is a
+     * screen under 600 dp on its shortest side.
+     */
+    @Override
+    protected void onCreate(Bundle state) {
+        if (getResources().getConfiguration().smallestScreenWidthDp < 600) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        }
+        super.onCreate(state);
+    }
+
     private static final int PICK = 0x4c43;
     private static final int DOCS = 0x4c44;
     private static final int TREE = 0x4c45;
