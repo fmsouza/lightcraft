@@ -53,7 +53,7 @@ tablets turn freely; the landscape arrangements below are theirs (and a short br
 - **Detail view:** the photo on top, and a bottom sheet with a tool row (Presets, Edit, Crop,
   Remove, Masking, Info …). The sheet shows that panel at full width; Hide puts it away. In
   landscape the sheet is a column at the right of the photo instead. The histogram is lower
-  than on the desktop, and the filmstrip is lower in landscape.
+  than on the desktop. There is no filmstrip: a swipe on the photo goes to the next or previous one.
 - **My Photos:** a full-width drawer (a column at the left in landscape) that closes when you
   pick a source.
 - **Grid:** about three thumbnails across the screen's short side, so landscape shows more of
@@ -62,7 +62,9 @@ tablets turn freely; the landscape arrangements below are theirs (and a short br
 - **Touch sizes:** on a phone's touch screen buttons, fields, checkboxes and menu items are
   30pt tall (22pt with a mouse). Dialogs span the screen up to 560pt wide and scroll.
 - **Before/After Left/Right** stacks the two views when the photo area is taller than wide.
-- **Bottom bar:** view modes, Sort, Filmstrip and an Edit toggle.
+- **No bottom bar in the library:** a pinch sizes the grid, a tap opens a photo, a long press
+  starts Select mode (whose own bar has Rate, Album, Move and Delete); Filter and Sort sit on the
+  album row.
 - **Loupe gestures:** pinch zooms about the fingers, from Fit to 1600%, and pinching back in
   snaps to Fit. Moving both fingers pans. At Fit, a one-finger swipe sideways drags the photo
   along, and letting go past a sixth of the screen shows the next or previous photo. When

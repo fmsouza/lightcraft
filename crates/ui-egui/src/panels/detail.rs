@@ -132,10 +132,11 @@ pub enum Gesture {
 /// full-screen aware), crop overlays and the render requests for the current view, or, when no
 /// photo is active, the empty-library message if the library is empty and "No photo selected"
 /// otherwise.
-/// Whether the filmstrip shows under the photo: not in the full-screen preview, and in the compact
-/// layout not while the edit sheet takes its place.
+/// Whether the filmstrip shows under the photo: not in the full-screen preview, and never in the
+/// compact layout, where a swipe on the photo goes to the next or previous one (as phone photo
+/// editors do) and the room goes to the photo and its tools.
 fn film_shown(app: &LightcraftApp, compact: bool, fullscreen: bool) -> bool {
-    app.ui.filmstrip && !fullscreen && !(compact && super::compact::sheet_open(app))
+    app.ui.filmstrip && !fullscreen && !compact
 }
 
 /// The before/after arrangement drawn in `area`: on a phone held upright Left/Right stacks the two

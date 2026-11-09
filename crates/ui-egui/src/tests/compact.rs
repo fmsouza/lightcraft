@@ -443,13 +443,13 @@ fn phone_landscape_puts_the_editor_beside_the_photo() {
     assert!(canvas.right() <= sheet.left() + 1.0, "the photo sits left of the sheet: {canvas:?}");
     assert!(canvas.height() > 250.0 && canvas.width() > 400.0, "the photo keeps its room: {canvas:?}");
     assert!(widget(&h, "slider:light.exposure").is_some(), "the Light sliders are in the sheet");
-    // without the sheet the filmstrip is lower than the desktop's, so the photo keeps most of the height
+    // without the sheet there is no filmstrip (a swipe on the photo changes photo): the photo
+    // takes the height
     click(&mut h, "icon:sheetClose");
     h.step();
     let canvas = h.app.canvas_rect.expect("the loupe");
-    let t = crate::theme::Tokens::get(&h.view.ctx);
-    let cell = h.app.widgets.iter().find(|(w, _)| w.starts_with("film:")).map(|(_, r)| *r).expect("a filmstrip cell");
-    assert!(cell.height() < t.film_h - 30.0 && canvas.height() > 2.0 * cell.height(), "{cell:?} under {canvas:?}");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("film:")), "no filmstrip on a phone");
+    assert!(canvas.height() > 0.6 * PHONE_LANDSCAPE[1], "{canvas:?}");
     // My Photos opens as a column beside the photos, not over them
     let mut h = demo(PHONE_LANDSCAPE, json!({"view": "photoGrid"}));
     click(&mut h, "icon:sidebar");
@@ -1311,4 +1311,14 @@ fn phone_dialog_dropdowns_list_finger_sized_rows() {
     assert!(list.height() >= 4.0 * 44.0, "finger-sized rows: {list:?}");
     assert!(combo.height() >= 44.0, "{combo:?}");
     assert!(!crate::widgets::set_finger_scope(false), "the dialog put the finger scope back");
+}
+
+#[test]
+fn phone_editor_has_no_filmstrip_between_the_photo_and_its_tools() {
+    let h = demo(PHONE, json!({"view": "detail"}));
+    assert!(h.app.ui.filmstrip, "the desktop's filmstrip setting is on");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("film:")), "but a phone shows none: a swipe on the photo changes photo");
+    // the desktop keeps it
+    let d = demo([1400.0, 900.0], json!({"view": "detail"}));
+    assert!(d.app.widgets.iter().any(|(w, _)| w.starts_with("film:")), "the desktop's filmstrip");
 }
