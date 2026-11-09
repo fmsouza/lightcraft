@@ -294,6 +294,19 @@ fn focus(h: &mut Headless, field: &str) {
 fn keyboard_lifts_the_layout_and_keeps_a_sheet_field_in_view() {
     let mut h = demo(PHONE, json!({"view": "detail", "right": "info"}));
     let sheet = widget(&h, "panel:sheet").expect("the Info sheet");
+    // bring the first text field into the lower part of the sheet (a phone's finger-sized rows
+    // put the photo's details above it)
+    for _ in 0..20 {
+        let title = widget(&h, "field:title").expect("the Title field");
+        if title.bottom() <= sheet.bottom() - 4.0 {
+            break;
+        }
+        let r = h.request("ui.move", json!({"x": sheet.center().x, "y": sheet.center().y}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let r = h.request("ui.scroll", json!({"dx": 0.0, "dy": -60.0}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
     // the lowest text field visible in the sheet, which a 330 pt keyboard would cover
     let (field, rect) = h
         .app
@@ -1349,4 +1362,18 @@ fn phone_held_sideways_shows_the_photo_alone_turned() {
     h.step();
     h.step();
     assert!(widget(&h, "photo:sideways").is_none());
+}
+
+#[test]
+fn phone_tool_panels_have_finger_sized_controls_under_one_title() {
+    let h = demo(PHONE, json!({"view": "detail", "right": "crop"}));
+    for id in ["button:cropRotateLeft", "button:cropRotateRight", "button:cropFlipH", "button:cropLock"] {
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
+        assert!(r.height() >= 44.0, "{id} is a finger's height: {r:?}");
+    }
+    // the desktop's Crop keeps its compact buttons
+    let d = demo([1400.0, 900.0], json!({"view": "detail", "right": "crop"}));
+    let r = widget(&d, "button:cropRotateLeft").expect("Rotate Left");
+    assert!(r.height() < 30.0, "{r:?}");
+    assert!(!crate::widgets::set_finger_scope(false), "the sheet put the finger scope back");
 }

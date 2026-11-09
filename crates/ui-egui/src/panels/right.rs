@@ -117,6 +117,11 @@ fn held_offset(ctx: &egui::Context) -> Option<f32> {
 }
 
 pub fn header(ui: &mut egui::Ui, title: &str) {
+    // the phone's sheet names its tool in its own header already (a heading within the panel,
+    // Crop's Geometry, stays)
+    if crate::panels::compact::is_compact(ui.ctx()) && matches!(title, "Crop" | "Masking" | "Remove" | "Red Eye" | "Info" | "Versions" | "History") {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
     ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);

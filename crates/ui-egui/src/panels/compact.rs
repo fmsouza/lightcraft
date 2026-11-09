@@ -815,7 +815,12 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         _ => {
             register(ui, "panel:right_panel", ui.available_rect_before_wrap());
+            // a tool's panel (Crop, Masking, Remove, Info …): the desktop's, with a finger's
+            // controls, dropdown lists included
+            finger_style(ui);
+            let before = crate::widgets::set_finger_scope(true);
             super::right::show(app, ui);
+            crate::widgets::set_finger_scope(before);
         }
     }
 }
