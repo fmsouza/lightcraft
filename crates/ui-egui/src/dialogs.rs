@@ -169,7 +169,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     };
     let mut import_pressed = None;
     // (dropdowns made in a finger-sized dialog list finger-sized rows)
-    let finger_before = crate::widgets::set_finger_scope(crate::panels::compact::is_compact(ctx) && !import && !print);
+    // (the import review only upright, where its photos have the height: on a short screen held
+    // sideways the larger controls would squeeze them)
+    let finger = crate::panels::compact::is_compact(ctx) && !print && (!import || ctx.content_rect().width() < crate::panels::compact::COMPACT_WIDTH);
+    let finger_before = crate::widgets::set_finger_scope(finger);
     let shown = window.show(ctx, |ui| {
         // Disabled, not skipped: the dialog keeps its layout and state, but a raw event in the
         // first prompt frame cannot toggle a checkbox or press a button underneath it. The
@@ -179,8 +182,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             ui.disable();
         }
         ui.spacing_mut().item_spacing.y = 8.0;
-        // (the import review and Print lay themselves out for the phone)
-        if !import && !print {
+        // (Print lays itself out for the phone)
+        if finger {
             crate::panels::compact::finger_style(ui);
         }
         body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
