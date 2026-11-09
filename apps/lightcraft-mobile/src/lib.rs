@@ -22,6 +22,8 @@ mod ios_files;
 #[cfg(target_os = "ios")]
 mod ios_keys;
 #[cfg(target_os = "ios")]
+mod ios_orientation;
+#[cfg(target_os = "ios")]
 mod ios_pencil;
 #[cfg(target_os = "ios")]
 mod ios_photos;
@@ -333,6 +335,12 @@ impl eframe::App for App {
         #[cfg(target_os = "android")]
         self.copy_row(ctx);
         self.photos_saved(ctx);
+        // which way the phone is held: the editor shows the photo alone, turned, when sideways
+        #[cfg(target_os = "ios")]
+        {
+            ios_orientation::start(ctx);
+            self.app.device_turn = ios_orientation::turn();
+        }
         memory::poll(&mut self.app.session);
         self.app.logic(ctx);
         // the settings, a few seconds after a change (a phone may stop the app without asking)

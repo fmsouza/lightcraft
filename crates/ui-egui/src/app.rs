@@ -119,6 +119,7 @@ impl LightcraftApp {
             shown_library: None,
             export: None,
             export_handoff: None,
+            device_turn: 0,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,

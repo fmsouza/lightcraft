@@ -343,6 +343,11 @@ pub struct LightcraftApp {
     /// Where the files of the next background export go once written (the phone Share sheet sets
     /// it around its `app.export`); none: the share sheet, as for any export on a phone.
     pub export_handoff: Option<export_task::Handoff>,
+    /// Which way a phone whose interface stays upright is held, as its shell reports it: 1 turned
+    /// with its top to the left, -1 to the right, 0 upright (and every other host). Held sideways,
+    /// the phone editor shows the photo alone, turned to fill the screen
+    /// ([`panels::compact`]'s sideways view).
+    pub device_turn: i8,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

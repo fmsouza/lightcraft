@@ -145,6 +145,51 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     super::more_sheet::show(app, ui.ctx());
     super::sort_sheet::show(app, ui.ctx());
     super::rate_sheet::show(app, ui.ctx());
+    sideways_photo(app, ui.ctx());
+}
+
+/// Whether the phone editor shows its photo alone, turned to fill the screen: the phone is held
+/// sideways (its interface stays upright: [`LightcraftApp::device_turn`]), on a photo with no
+/// tool's sheet, sheet or dialog open, as phone photo editors do. Turned back, the editor returns.
+pub fn sideways(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    app.device_turn != 0
+        && app.ui.view == ViewMode::Detail
+        && app.session.active().is_some()
+        && !sheet_open(app)
+        && app.ui.dialog.is_none()
+        && !super::share_sheet::is_open(ctx)
+        && !super::rate_sheet::is_open(ctx)
+        && !super::more_sheet::is_open(ctx)
+}
+
+/// The photo alone on black, turned a quarter towards the way the phone is held so it fills the
+/// screen ([`sideways`]). The editor goes on underneath (its renders keep coming); this covers it
+/// and takes the taps.
+fn sideways_photo(app: &LightcraftApp, ctx: &egui::Context) {
+    if !sideways(app, ctx) {
+        return;
+    }
+    let Some(id) = app.session.active() else { return };
+    let mine = |s: crate::render::Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
+    let tex = mine(crate::render::Slot::Main).or_else(|| mine(crate::render::Slot::Preview)).or_else(|| app.renderer.thumb(id));
+    let screen = ctx.viewport_rect();
+    let room = ctx.content_rect();
+    egui::Area::new(egui::Id::unique("compact-sideways")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+        let (_, _) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
+        ui.painter().rect_filled(screen, 0.0, egui::Color32::BLACK);
+        let Some(tex) = tex else { return };
+        let [w, h] = tex.size.map(|v| v.max(1) as f32);
+        // turned a quarter, the photo's width runs down the screen: fit it in the room so
+        let scale = (room.height() / w).min(room.width() / h);
+        let upright = Rect::from_center_size(room.center(), vec2(w * scale, h * scale));
+        // top to the left: the photo's top faces the screen's right (a clockwise quarter)
+        let angle = f32::from(app.device_turn.signum()) * std::f32::consts::FRAC_PI_2;
+        egui::Image::from_texture(egui::load::SizedTexture::new(tex.tex.id(), upright.size()))
+            .rotate(angle, egui::Vec2::splat(0.5))
+            .paint_at(ui, upright);
+        let shown = Rect::from_center_size(room.center(), vec2(h * scale, w * scale));
+        register(ui, "photo:sideways", shown);
+    });
 }
 
 /// A bar along the top with the safe-area and margins of the compact layout.

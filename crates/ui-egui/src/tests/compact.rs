@@ -1322,3 +1322,31 @@ fn phone_editor_has_no_filmstrip_between_the_photo_and_its_tools() {
     let d = demo([1400.0, 900.0], json!({"view": "detail"}));
     assert!(d.app.widgets.iter().any(|(w, _)| w.starts_with("film:")), "the desktop's filmstrip");
 }
+
+#[test]
+fn phone_held_sideways_shows_the_photo_alone_turned() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "none"}));
+    let id = h.app.session.active().expect("a photo");
+    assert!(widget(&h, "photo:sideways").is_none(), "upright: the editor");
+    h.app.device_turn = 1;
+    h.step();
+    h.step();
+    let shown = widget(&h, "photo:sideways").expect("sideways: the photo alone");
+    // a quarter turn swaps the photo's sides on the screen
+    let p = h.app.session.catalog.photo(id).expect("photo");
+    let (w, hgt) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+    let photo_wide = w >= hgt;
+    assert_eq!(shown.height() > shown.width(), photo_wide, "turned: {shown:?} for a {w}×{hgt} photo");
+    assert!(shown.width() <= PHONE[0] + 0.5 && shown.height() <= PHONE[1] + 0.5, "it fits the screen: {shown:?}");
+    // a tool's sheet open: editing stays upright
+    h.app.ui.right = RightPanel::Edit;
+    h.step();
+    h.step();
+    assert!(widget(&h, "photo:sideways").is_none(), "editing stays upright");
+    // turned back: the editor
+    h.app.ui.right = RightPanel::None;
+    h.app.device_turn = 0;
+    h.step();
+    h.step();
+    assert!(widget(&h, "photo:sideways").is_none());
+}
