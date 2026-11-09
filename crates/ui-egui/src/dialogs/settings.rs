@@ -93,6 +93,56 @@ const PINNED_PREVIEW_SHARE: f32 = 0.4;
 /// choice and the rule under it take around the slide (at the default spacing, about 82 pt).
 const PREVIEW_CHROME: f32 = 82.0;
 
+/// The phone layout's Settings: the sections as finger-sized rows (true: that list is the page,
+/// nothing more to draw), or above a section's page, ‹ back to them and its name. A plain Settings
+/// opens on the list; one opened on another section opens that section's page.
+fn phone_sections(ui: &mut egui::Ui, tab: &mut String) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let key = egui::Id::unique("settings-phone-page");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let (mut open, last) = ui.data(|d| d.get_temp::<(bool, u64)>(key)).unwrap_or((false, 0));
+    if last + 1 < pass {
+        // shown again: a plain Settings (General) starts on the list; one opened on a section
+        // (AI Denoise from its panel, Faces …) goes straight to its page
+        open = tab != "general";
+    }
+    let row = |ui: &mut egui::Ui, id: String, label: &str, back: bool| -> bool {
+        let w = ui.available_width();
+        let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 48.0), egui::Sense::click());
+        register(ui, id, r);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        let p = ui.painter();
+        if resp.is_pointer_button_down_on() {
+            p.rect_filled(r, 8.0, t.hover);
+        }
+        let (icon, x) = if back { (crate::icons::Icon::ChevronLeft, r.left() + 12.0) } else { (crate::icons::Icon::ChevronRight, r.right() - 12.0) };
+        crate::icons::paint(p, egui::Rect::from_center_size(egui::pos2(x, r.center().y), egui::vec2(16.0, 16.0)), icon, t.text_dim);
+        let text_x = if back { r.left() + 30.0 } else { r.left() + 8.0 };
+        p.text(egui::pos2(text_x, r.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), if back { t.accent } else { t.text });
+        resp.clicked()
+    };
+    let mut list = !open;
+    if open {
+        if row(ui, "button:settingsBack".into(), crate::i18n::tr("All Settings"), true) {
+            open = false;
+            list = true;
+        } else if let Some((_, label)) = TABS.iter().find(|(id, _)| id == tab) {
+            ui.label(egui::RichText::new(crate::i18n::tr(label)).font(t.semibold(18.0)).color(t.text));
+        }
+    }
+    if list {
+        for (id, label) in TABS {
+            if row(ui, format!("button:settingsTab-{id}"), crate::i18n::tr(label), false) {
+                *tab = id.to_string();
+                open = true;
+            }
+        }
+        ui.ctx().request_repaint();
+    }
+    ui.data_mut(|d| d.insert_temp(key, (open, pass)));
+    list && !open
+}
+
 /// The Settings window's content: the tab bar, which stays put, above the page of `tab`
 /// ([`body`]), which scrolls when it is taller than the room for it, with a scroll handle that
 /// shows without the pointer on it. `max_height` is the room the app window leaves for both: the
@@ -110,15 +160,24 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     // the next frame, so a text box on the page being left is drawn once more and saves what was
     // typed in it (the click took the focus from it).
     let shown = tab.clone();
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-        for (id, label) in TABS {
-            if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, shown == *id).clicked() {
-                *tab = id.to_string();
-                ui.ctx().request_repaint();
-            }
+    let portrait_phone = crate::panels::compact::is_compact(ui.ctx()) && ui.ctx().content_rect().width() < crate::panels::compact::COMPACT_WIDTH;
+    if portrait_phone {
+        // a phone held upright: the sections as a list, a section's page with ‹ back to it (held
+        // sideways it has the width for the tab bar)
+        if phone_sections(ui, tab) {
+            return;
         }
-    });
+    } else {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            for (id, label) in TABS {
+                if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, shown == *id).clicked() {
+                    *tab = id.to_string();
+                    ui.ctx().request_repaint();
+                }
+            }
+        });
+    }
     ui.separator();
     // (a point less than the room left, so rounding never makes the dialog's own scroll area scroll)
     let room = max_height - (ui.cursor().top() - top) - 1.0;

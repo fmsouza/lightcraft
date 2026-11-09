@@ -1146,9 +1146,9 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
     let t = Tokens::get(ui.ctx());
-    let font = t.semibold(11.5);
+    let (font, h) = text_button_font(ui);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
-    let size = vec2(text_button_width(galley.size().x), 24.0);
+    let size = vec2(text_button_width(ui, galley.size().x), h);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     register(ui, format!("button:{id}"), r);
@@ -1165,16 +1165,26 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     resp
 }
 
+/// Where controls are finger-sized ([`crate::panels::compact::finger_style`]): a phone's dialogs.
+pub(crate) fn finger_ui(ui: &Ui) -> bool {
+    ui.spacing().interact_size.y >= 44.0
+}
+
+/// A [`text_button`]'s label font and height: larger where controls are finger-sized.
+fn text_button_font(ui: &Ui) -> (egui::FontId, f32) {
+    let t = Tokens::get(ui.ctx());
+    if finger_ui(ui) { (t.semibold(15.0), 44.0) } else { (t.semibold(11.5), 24.0) }
+}
+
 /// The width of a [`text_button`] whose label is `text_width` wide.
-fn text_button_width(text_width: f32) -> f32 {
-    (text_width + 18.0).max(37.0)
+fn text_button_width(ui: &Ui, text_width: f32) -> f32 {
+    if finger_ui(ui) { (text_width + 28.0).max(48.0) } else { (text_width + 18.0).max(37.0) }
 }
 
 /// The width [`text_button`] takes for `label` (translated as it would be), to plan a row before drawing it.
 pub fn text_button_size(ui: &Ui, label: &str) -> f32 {
-    let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.semibold(11.5), t.text);
-    text_button_width(galley.size().x)
+    let galley = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), text_button_font(ui).0, Color32::WHITE);
+    text_button_width(ui, galley.size().x)
 }
 
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
@@ -1192,7 +1202,7 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
             for (j, (label, key)) in row.iter().enumerate() {
                 let label = crate::i18n::tr(label);
                 let i = row_i * per_row + j;
-                let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(seg_w, text_button_font(ui).1), Sense::click());
                 crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
                 register(ui, format!("button:{id}-{key}"), r);
                 let fill = if active == Some(i) {
@@ -1204,7 +1214,7 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 };
                 let p = ui.painter();
                 p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                p.text(r.center(), Align2::CENTER_CENTER, label, text_button_font(ui).0, t.text);
                 if resp.clicked() {
                     clicked = Some(i);
                 }

@@ -1268,3 +1268,23 @@ fn phone_dialogs_have_finger_sized_controls() {
     let ok = widget(&d, "button:dialogOk").expect("Create");
     assert!(ok.height() <= 32.0, "{ok:?}");
 }
+
+#[test]
+fn phone_settings_is_a_list_of_sections_then_a_page() {
+    let mut h = grid_phone();
+    assert!(h.app.run("app.settings", json!({})).is_ok());
+    h.step();
+    h.step();
+    let row = widget(&h, "button:settingsTab-display").expect("the sections as rows");
+    assert!(row.height() >= 44.0, "{row:?}");
+    assert!(widget(&h, "settings:page").is_none(), "no page until a section is chosen");
+    click(&mut h, "button:settingsTab-general");
+    assert!(widget(&h, "settings:page").is_some(), "General's page");
+    assert!(widget(&h, "button:settingsTab-display").is_none(), "the list gives way to it");
+    let english = h.app.widgets.iter().find(|(w, _)| w.starts_with("button:lang-") || w == "button:language-en").map(|(_, r)| *r);
+    if let Some(r) = english {
+        assert!(r.height() >= 44.0, "finger-sized choices: {r:?}");
+    }
+    click(&mut h, "button:settingsBack");
+    assert!(widget(&h, "button:settingsTab-display").is_some(), "‹ back to the sections");
+}
