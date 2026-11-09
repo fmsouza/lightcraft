@@ -14,7 +14,7 @@ pub fn combo_box(id: impl egui::AsIdSalt) -> craft_ui::ComboBox<'static> {
         .icon(|ui, rect, visuals, _| {
             paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, visuals.fg_stroke.color);
         })
-        .popup_style(list_style.into())
+        .popup_style(if FINGER_SCOPE.with(std::cell::Cell::get) { finger_list_style.into() } else { list_style.into() })
 }
 
 /// Name a dropdown for screen readers. egui 0.37's `ComboBox::from_id_salt` publishes only the
@@ -29,6 +29,31 @@ pub fn name_combo(response: &egui::Response, label: &str) {
 /// grew 2 points when hovered, and the longest name of a list sized to it wrapped (#2354).
 fn list_style(style: &mut egui::Style) {
     style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+}
+
+/// [`list_style`] with finger-sized rows: a dropdown made among finger-sized controls.
+fn finger_list_style(style: &mut egui::Style) {
+    list_style(style);
+    style.spacing.button_padding = vec2(14.0, 12.0);
+    style.spacing.interact_size.y = 44.0;
+    style.spacing.item_spacing.y = 2.0;
+    for s in [egui::TextStyle::Body, egui::TextStyle::Button] {
+        if let Some(f) = style.text_styles.get_mut(&s) {
+            f.size = f.size.max(16.0);
+        }
+    }
+}
+
+thread_local! {
+    /// Whether the controls being drawn are finger-sized (a phone's dialog): set by the dialog for
+    /// as long as it draws, read by [`combo_box`], whose list (a pop-up of its own) does not
+    /// inherit the dialog's style. Per thread: the UI's, or one test's.
+    static FINGER_SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark the controls drawn from now on as finger-sized or not; returns what it was (to put back).
+pub(crate) fn set_finger_scope(on: bool) -> bool {
+    FINGER_SCOPE.with(|f| f.replace(on))
 }
 
 /// A native button with a vector arrow beside its text; egui reserves the icon's space.

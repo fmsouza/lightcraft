@@ -168,6 +168,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         crate::panels::compact::dialog(ctx, window)
     };
     let mut import_pressed = None;
+    // (dropdowns made in a finger-sized dialog list finger-sized rows)
+    let finger_before = crate::widgets::set_finger_scope(crate::panels::compact::is_compact(ctx) && !import && !print);
     let shown = window.show(ctx, |ui| {
         // Disabled, not skipped: the dialog keeps its layout and state, but a raw event in the
         // first prompt frame cannot toggle a checkbox or press a button underneath it. The
@@ -202,6 +204,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         crate::panels::compact::keep_focus_visible(ui);
         content_w = ui.min_rect().width();
     });
+    crate::widgets::set_finger_scope(finger_before);
     match import_pressed {
         Some(crate::import::Footer::Cancel) => close = true,
         Some(crate::import::Footer::Import) => confirm = true,

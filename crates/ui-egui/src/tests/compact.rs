@@ -1288,3 +1288,27 @@ fn phone_settings_is_a_list_of_sections_then_a_page() {
     click(&mut h, "button:settingsBack");
     assert!(widget(&h, "button:settingsTab-display").is_some(), "‹ back to the sections");
 }
+
+#[test]
+fn phone_dialog_dropdowns_list_finger_sized_rows() {
+    let mut h = demo(PHONE, json!({"view": "detail"}));
+    assert!(h.app.run("dialog.export", json!({})).is_ok());
+    h.step();
+    h.step();
+    click(&mut h, "combo:exportPreset");
+    // the list's rows: the items egui laid out in the pop-up below the dropdown
+    let combo = widget(&h, "combo:exportPreset").expect("the dropdown");
+    // the pop-up below the dropdown holds the four built-in presets
+    let list = h.view.ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter_map(|l| m.area_rect(l.id))
+            .filter(|r| r.top() >= combo.bottom() - 1.0 && (r.left() - combo.left()).abs() < 2.0)
+            .max_by(|a, b| a.height().total_cmp(&b.height()))
+    });
+    let list = list.expect("its list is open below it");
+    assert!(list.height() >= 4.0 * 44.0, "finger-sized rows: {list:?}");
+    assert!(combo.height() >= 44.0, "{combo:?}");
+    assert!(!crate::widgets::set_finger_scope(false), "the dialog put the finger scope back");
+}
