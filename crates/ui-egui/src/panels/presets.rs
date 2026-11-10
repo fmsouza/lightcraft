@@ -106,49 +106,48 @@ fn look(ctx: &egui::Context) -> Look {
     }
 }
 
+/// Create Preset… and "…" (thumbnails, import, export), right to left in `ui`, `size` square: the
+/// panel's header on the desktop, the sheet's on a phone.
+pub(crate) fn header_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, size: f32) {
+    if icon_button(ui, "presetCreate", Icon::Plus, vec2(size, size), false, app.session.active().is_some(), crate::i18n::tr("Create Preset…"))
+        .clicked()
+    {
+        app.ui.dialog = Some(crate::state::Dialog::create_preset());
+    }
+    let more = icon_button(ui, "presetMore", Icon::More, vec2(size, size), false, true, crate::i18n::tr("More preset options"));
+    egui::Popup::menu(&more).show(|ui| {
+        let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
+        register(ui, "presetMenu:thumbnails", r.rect);
+        ui.separator();
+        if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
+            let _ = app.run("file.importPresets", json!({}));
+        }
+        let any_user = app.session.presets.iter().any(|p| !p.builtin);
+        if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
+            let _ = app.run("file.exportPresets", json!({}));
+        }
+    });
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let lk = look(ui.ctx());
     egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
+        // (a phone's sheet has them in its own header, beside its title)
         if lk.title {
+            let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
             ui.painter().text(pos2(hr.left() + 24.0, hr.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr("Presets"), t.semibold(15.0), t.text);
+            let mut hdr = ui.new_child(
+                egui::UiBuilder::new()
+                    // the "+" glyph as far from the right edge as the title from the left (its 28 pt
+                    // button draws it about 9 pt inside)
+                    .max_rect(Rect::from_min_max(pos2(hr.right() - 16.0 - 2.0 * lk.icon - 24.0, hr.top()), pos2(hr.right() - 16.0, hr.bottom())))
+                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            );
+            header_buttons(app, &mut hdr, lk.icon);
+            divider(ui);
         }
-        let mut hdr = ui.new_child(
-            egui::UiBuilder::new()
-                // the "+" glyph as far from the right edge as the title from the left (its 28 pt
-                // button draws it about 9 pt inside)
-                .max_rect(Rect::from_min_max(pos2(hr.right() - 16.0 - 2.0 * lk.icon - 24.0, hr.top()), pos2(hr.right() - 16.0, hr.bottom())))
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        if icon_button(
-            &mut hdr,
-            "presetCreate",
-            Icon::Plus,
-            vec2(lk.icon, lk.icon),
-            false,
-            app.session.active().is_some(),
-            crate::i18n::tr("Create Preset…"),
-        )
-        .clicked()
-        {
-            app.ui.dialog = Some(crate::state::Dialog::create_preset());
-        }
-        let more = icon_button(&mut hdr, "presetMore", Icon::More, vec2(lk.icon, lk.icon), false, true, crate::i18n::tr("More preset options"));
-        egui::Popup::menu(&more).show(|ui| {
-            let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
-            register(ui, "presetMenu:thumbnails", r.rect);
-            ui.separator();
-            if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
-                let _ = app.run("file.importPresets", json!({}));
-            }
-            let any_user = app.session.presets.iter().any(|p| !p.builtin);
-            if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
-                let _ = app.run("file.exportPresets", json!({}));
-            }
-        });
-        divider(ui);
         // amount slider (applies to the last applied preset)
         let amt_id = egui::Id::unique("preset-amount");
         let last: Option<AppliedPreset> = ui.data(|d| d.get_temp(amt_id));

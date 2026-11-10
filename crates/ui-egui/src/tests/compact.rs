@@ -1412,8 +1412,12 @@ fn phone_presets_list_shows_looks_in_finger_sized_rows() {
     assert!(row.height() >= 60.0, "a thumbnail row a finger can take: {row:?}");
     let group = h.app.widgets.iter().find(|(w, _)| w.starts_with("presetGroup:")).map(|(_, r)| *r).expect("a group heading");
     assert!(group.height() >= 44.0, "{group:?}");
+    // + and "…" in the sheet's header, beside its title and Hide (no strip of their own)
+    let hide = widget(&h, "icon:sheetClose").expect("the sheet's Hide");
     for id in ["icon:presetCreate", "icon:presetMore"] {
-        assert!(widget(&h, id).unwrap_or_else(|| panic!("{id}")).height() >= 40.0, "{id}");
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
+        assert!(r.height() >= 36.0 && (r.center().y - hide.center().y).abs() < 1.0, "{id} in the header: {r:?}");
+        assert!(r.bottom() <= group.top(), "{id} above the list");
     }
     // the desktop keeps its dense list
     let d = demo([1400.0, 900.0], json!({"view": "detail", "presets": true}));

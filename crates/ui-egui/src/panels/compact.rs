@@ -791,6 +791,10 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     if let Some((key, on)) = eye {
                         section_eye(app, ui, key, on);
                     }
+                    // Presets: + and "…" here, beside the title, not in a strip of their own
+                    if app.ui.presets {
+                        super::presets::header_buttons(app, ui, 36.0);
+                    }
                 });
             });
         });
