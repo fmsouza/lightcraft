@@ -119,7 +119,7 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
     });
     let options = if phone {
-        "… → All Menus → View → View Options chooses the lines Info 1 and Info 2 show."
+        "View Options, in a photo's “…”, chooses the lines Info 1 and Info 2 show."
     } else {
         "View → View Options chooses the lines Info 1 and Info 2 show."
     };

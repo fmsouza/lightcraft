@@ -1873,3 +1873,16 @@ fn phone_settings_leave_out_ai_denoise_and_large_face_models() {
     let h = mobile_settings("denoise");
     assert!(widget(&h, "combo:settingsLanguage").is_some(), "General instead");
 }
+
+#[test]
+fn phone_about_holds_the_help_menus_rows() {
+    let mut h = grid_phone();
+    assert!(h.app.run("app.about", json!({})).is_ok());
+    for _ in 0..4 {
+        h.step();
+    }
+    for id in ["about:app.whatsNew", "about:app.feedback", "about:app.help", "about:app.systemInfo"] {
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id} in About"));
+        assert!(r.height() >= 44.0, "{id}: {r:?}");
+    }
+}

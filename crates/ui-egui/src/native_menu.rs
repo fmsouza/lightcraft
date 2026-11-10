@@ -163,6 +163,7 @@ pub fn more_items(app: &LightcraftApp, editor: bool) -> Vec<NativeItem> {
                     NativeItem::Submenu { label: crate::i18n::tr("Before/After").into(), symbol: "rectangle.split.2x1", items: before_after },
                     action("view.focusPoint", "Focus Point", "scope"),
                     action("view.faceBoxes", "Face Boxes", "face.smiling"),
+                    action("view.viewOptions", "View Options…", "slider.horizontal.3"),
                 ],
             ),
             section("", vec![delete]),

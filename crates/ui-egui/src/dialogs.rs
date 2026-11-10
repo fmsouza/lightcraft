@@ -1967,6 +1967,8 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
                     let _ = crate::links::open(app, url);
                 }
             }
+            // (a phone has no Help menu: What's New, feedback, help and system info are here)
+            crate::panels::compact::about_help_rows(app, ui);
         }
     }
 }
