@@ -140,8 +140,12 @@ fn switch_row(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> boo
     resp.changed()
 }
 
-/// Mutually exclusive buttons (`button:{id}-{index}`).
+/// Mutually exclusive buttons (`button:{id}-{index}`). Upright on a phone, a list with a tick by
+/// the one chosen, as a phone's settings have it ([`tick_list`]).
 pub(crate) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options: &[(V, &str)], value: &mut V) -> bool {
+    if phone_list(ui) {
+        return tick_list(ui, id, options, value, |_| None);
+    }
     let mut changed = false;
     ui.spacing_mut().item_spacing.x = 4.0;
     for (i, (v, l)) in options.iter().enumerate() {
@@ -150,6 +154,62 @@ pub(crate) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options:
             changed = true;
         }
     }
+    changed
+}
+
+/// Upright on a phone, with finger-sized controls: choices are lists ([`tick_list`]).
+pub(crate) fn phone_list(ui: &egui::Ui) -> bool {
+    crate::widgets::finger_ui(ui) && crate::panels::settings::portrait_phone(ui.ctx())
+}
+
+/// A phone's list of choices: one row each (`button:{id}-{index}`), the chosen one ticked, lines
+/// between; `swatch` may give a row two colours to show before its name (a theme's). True when
+/// the choice changed.
+pub(crate) fn tick_list<V: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    id: &str,
+    options: &[(V, &str)],
+    value: &mut V,
+    swatch: impl Fn(&V) -> Option<(egui::Color32, egui::Color32)>,
+) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let mut changed = false;
+    ui.vertical(|ui| {
+        let w = ui.available_width();
+        ui.set_width(w);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (i, (v, label)) in options.iter().enumerate() {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 44.0), egui::Sense::click());
+            register(ui, format!("button:{id}-{i}"), r);
+            let label = crate::i18n::tr(label);
+            let on = *value == *v;
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, label));
+            let p = ui.painter();
+            if resp.is_pointer_button_down_on() {
+                p.rect_filled(r, 6.0, t.hover);
+            }
+            let mut x = r.left() + 4.0;
+            if let Some((back, front)) = swatch(v) {
+                let s = egui::Rect::from_center_size(egui::pos2(x + 13.0, r.center().y), egui::vec2(26.0, 26.0));
+                p.rect_filled(s, 6.0, back);
+                p.rect_stroke(s, 6.0, egui::Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
+                p.circle_filled(s.center(), 6.0, front);
+                x += 36.0;
+            }
+            p.text(egui::pos2(x, r.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), t.text);
+            if on {
+                let tick = egui::Rect::from_center_size(egui::pos2(r.right() - 14.0, r.center().y), egui::vec2(18.0, 18.0));
+                crate::icons::paint(p, tick, crate::icons::Icon::Check, t.accent);
+            }
+            if i + 1 < options.len() {
+                p.hline(x..=r.right(), r.bottom() - 0.5, egui::Stroke::new(1.0, t.divider));
+            }
+            if resp.clicked() && !on {
+                *value = *v;
+                changed = true;
+            }
+        }
+    });
     changed
 }
 

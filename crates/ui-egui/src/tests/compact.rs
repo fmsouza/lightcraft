@@ -1630,3 +1630,21 @@ fn phone_settings_is_a_sheet_from_the_bottom_edge() {
     click(&mut h, "button:settingsClose");
     assert!(h.app.ui.dialog.is_none(), "✕ closes it");
 }
+
+#[test]
+fn phone_interface_is_a_phones_display_settings() {
+    let mut h = mobile_settings("interface");
+    // Light and Dark as phones side by side, Automatic, then each family as a ticked list
+    assert!(widget(&h, "button:appearanceLight").is_some() && widget(&h, "button:appearanceDark").is_some());
+    assert!(widget(&h, "check:settings.appearanceAuto").is_some(), "Automatic");
+    assert!(widget(&h, "button:themeLight-0").is_some() && widget(&h, "button:themeDark-1").is_some());
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("radio:theme-") || w.starts_with("button:themeFavorite-")), "no desktop cards");
+    click(&mut h, "button:appearanceLight");
+    assert_eq!(h.app.ui.settings.appearance_mode, crate::state::AppearanceMode::Light);
+    click(&mut h, "check:settings.appearanceAuto");
+    assert_eq!(h.app.ui.settings.appearance_mode, crate::state::AppearanceMode::Auto);
+    // the other choices: full-width rows with a tick
+    let page = widget(&h, "settings:page").expect("the page");
+    let row = widget(&h, "button:settingsGridBadges-0").expect("Ratings & flags as a list");
+    assert!(row.height() >= 44.0 && row.width() > page.width() - 40.0, "{row:?} in {page:?}");
+}
