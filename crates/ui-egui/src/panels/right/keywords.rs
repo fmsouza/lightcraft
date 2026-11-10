@@ -287,7 +287,10 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
     let kws: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     if kws.is_empty() {
-        ui.label(egui::RichText::new(crate::i18n::tr("Keywords you add appear here; ⌥1–⌥9 apply them.")).color(t.text_dim));
+        // (a phone has no ⌥ keys to apply them with)
+        let hint =
+            if crate::widgets::finger_ui(ui) { "Keywords you add appear here." } else { "Keywords you add appear here; ⌥1–⌥9 apply them." };
+        ui.label(egui::RichText::new(crate::i18n::tr(hint)).color(t.text_dim));
         return;
     }
     let bw = ((ui.available_width() - 8.0) / 3.0).floor().max(40.0);

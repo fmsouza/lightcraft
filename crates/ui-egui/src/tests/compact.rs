@@ -1377,3 +1377,28 @@ fn phone_tool_panels_have_finger_sized_controls_under_one_title() {
     assert!(r.height() < 30.0, "{r:?}");
     assert!(!crate::widgets::set_finger_scope(false), "the sheet put the finger scope back");
 }
+
+#[test]
+fn phone_keyword_list_fits_the_sheet_with_finger_sized_rows() {
+    let mut h = grid_phone();
+    h.app.ui.right = RightPanel::Keywords;
+    h.step();
+    h.step();
+    let sheet = widget(&h, "panel:sheet").expect("the Keywords sheet");
+    for id in ["field:keywordFilter", "keywordList:create", "keywordList:delete"] {
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
+        assert!(r.right() <= sheet.right() + 0.5, "{id} inside the sheet: {r:?} in {sheet:?}");
+    }
+    assert!(widget(&h, "keywordList:create").expect("+").height() >= 44.0);
+    let row = h.app.widgets.iter().find(|(w, _)| w.starts_with("keywordRow:")).map(|(_, r)| *r).expect("a keyword row");
+    assert!(row.height() >= 44.0, "{row:?}");
+    let count = h.app.widgets.iter().find(|(w, _)| w.starts_with("keywordCount:")).map(|(_, r)| *r).expect("its count");
+    assert!(count.right() <= sheet.right(), "the count is on screen: {count:?}");
+    // the desktop keeps its dense list
+    let mut d = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    d.app.ui.right = RightPanel::Keywords;
+    d.step();
+    d.step();
+    let row = d.app.widgets.iter().find(|(w, _)| w.starts_with("keywordRow:")).map(|(_, r)| *r).expect("a keyword row");
+    assert!(row.height() < 30.0, "{row:?}");
+}
