@@ -59,17 +59,14 @@ fn mobile_storage(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     legend(ui, t.accent, crate::i18n::tr("Cached thumbnails and previews"), in_use);
     legend(ui, t.text_dim.gamma_multiply(0.6), crate::i18n::tr("Size limit"), size(f64::from(mb) * 1048576.0));
     heading(ui, t, crate::i18n::tr("Manage storage"));
-    ui.label(RichText::new(crate::i18n::tr("Cache size limit")).color(t.text));
-    ui.spacing_mut().slider_width = (ui.available_width() - 90.0).max(120.0);
-    let r = ui.add(
-        egui::Slider::new(&mut mb, 256..=8192)
-            .step_by(256.0)
-            .custom_formatter(|v, _| if v >= 1024.0 { format!("{:.1} GB", v / 1024.0) } else { format!("{v:.0} MB") }),
-    );
-    register(ui, "slider:settingsCache", r.rect);
-    if r.dragged() {
+    let mut v = f64::from(mb);
+    let gb = |v: f64| if v >= 1024.0 { format!("{:.1} GB", v / 1024.0) } else { format!("{v:.0} MB") };
+    let slid = super::widgets::phone_slider(ui, "settingsCache", "Cache size limit", &mut v, 256.0..=8192.0, false, Some(256.0), gb);
+    mb = v.round() as u32;
+    if slid.changed {
         ui.data_mut(|d| d.insert_temp(key, mb));
-    } else if r.changed() || r.drag_stopped() {
+    }
+    if slid.released {
         ui.data_mut(|d| d.remove::<u32>(key));
         if mb != cur {
             let _ = app.run("library.preferences", json!({"cacheMb": mb}));

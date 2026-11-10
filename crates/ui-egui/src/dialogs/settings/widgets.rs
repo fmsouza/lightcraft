@@ -238,20 +238,83 @@ pub(crate) fn tick_row(ui: &mut egui::Ui, id: &str, label: &str, on: bool) -> bo
     resp.clicked()
 }
 
-/// A phone's setting with a list of values: a row with its name and the value chosen (`combo:{id}`)
-/// that opens the list under it; `list` draws the choices and returns what was picked, which
-/// closes it again. `None` until something is picked.
-pub(crate) fn disclosure<R>(ui: &mut egui::Ui, id: &str, label: &str, value: &str, list: impl FnOnce(&mut egui::Ui) -> Option<R>) -> Option<R> {
+/// The page a phone's [`disclosure`] row opened: its choices, drawn in place of the section's
+/// page by [`super::window`] (as a phone's settings push a page for a list), until one is picked
+/// or ‹ goes back.
+#[derive(Clone, Debug)]
+pub(crate) struct SubPage {
+    pub id: String,
+    pub title: String,
+    /// (label, is a group's heading)
+    pub options: Vec<(String, bool)>,
+    pub current: Option<usize>,
+}
+
+pub(crate) fn subpage_id() -> egui::Id {
+    egui::Id::unique("settings-subpage")
+}
+
+fn picked_id() -> egui::Id {
+    egui::Id::unique("settings-subpage-picked")
+}
+
+/// The open [`SubPage`], if any.
+pub(crate) fn subpage(ctx: &egui::Context) -> Option<SubPage> {
+    ctx.data(|d| d.get_temp::<SubPage>(subpage_id()))
+}
+
+pub(crate) fn close_subpage(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<SubPage>(subpage_id()));
+}
+
+/// Draw the open sub-page's choices (one 44 pt row each, the chosen one ticked; headings in
+/// small capitals). A pick closes it; the row that opened it returns the pick on the next frame.
+pub(crate) fn subpage_list(ui: &mut egui::Ui, page: &SubPage) {
     let t = Tokens::get(ui.ctx());
-    let key = egui::Id::unique(("settings-disclosure", id));
-    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    for (i, (label, header)) in page.options.iter().enumerate() {
+        if *header {
+            ui.add_space(6.0);
+            ui.label(RichText::new(label.to_uppercase()).font(t.font(13.0)).color(t.text_dim));
+            continue;
+        }
+        if tick_row(ui, &format!("{}List-{i}", page.id), label, page.current == Some(i)) {
+            let id = page.id.clone();
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(picked_id(), (id, i));
+                d.remove::<SubPage>(subpage_id());
+            });
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
+/// A phone's setting with a list of values: a row with its name, the value chosen and › at the
+/// right (`combo:{id}`), which opens the choices as a page of their own ([`SubPage`]): `options`
+/// are (label, is a heading). The index picked comes back on the frame after.
+pub(crate) fn disclosure(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    value: &str,
+    options: Vec<(String, bool)>,
+    current: Option<usize>,
+) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let picked = ui.ctx().data_mut(|d| {
+        let p = d.get_temp::<(String, usize)>(picked_id()).filter(|(i, _)| i == id);
+        if p.is_some() {
+            d.remove::<(String, usize)>(picked_id());
+        }
+        p.map(|(_, i)| i)
+    });
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 44.0), egui::Sense::click());
     register(ui, format!("combo:{id}"), r);
     let label = crate::i18n::tr(label);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, format!("{label}: {value}")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{label}: {value}")));
     if resp.clicked() {
-        open = !open;
+        let page = SubPage { id: id.to_string(), title: label.to_string(), options, current };
+        ui.ctx().data_mut(|d| d.insert_temp(subpage_id(), page));
     }
     let p = ui.painter();
     if resp.is_pointer_button_down_on() {
@@ -259,22 +322,88 @@ pub(crate) fn disclosure<R>(ui: &mut egui::Ui, id: &str, label: &str, value: &st
     }
     p.text(egui::pos2(r.left() + 4.0, r.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), t.text);
     let chevron = egui::Rect::from_center_size(egui::pos2(r.right() - 10.0, r.center().y), egui::vec2(14.0, 14.0));
-    crate::icons::paint(p, chevron, if open { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown }, t.text_dim);
-    // the value, cut short from its end where the name leaves too little room
+    crate::icons::paint(p, chevron, crate::icons::Icon::ChevronRight, t.text_dim);
+    // the value, cut short where the name leaves too little room
     let name_w = p.layout_no_wrap(label.to_string(), t.font(16.0), t.text).size().x;
     let room = (w - name_w - 48.0).max(40.0);
     let shown = crate::widgets::one_line(p, value, t.font(16.0), t.text_dim, room);
     let at = egui::pos2(chevron.left() - 8.0 - shown.size().x, r.center().y - shown.size().y / 2.0);
     p.galley(at, shown, t.text_dim);
-    let mut out = None;
-    if open {
-        out = ui.indent(("disclosure", id), list).inner;
-        if out.is_some() {
-            open = false;
+    picked
+}
+
+/// What a [`phone_slider`] did this frame.
+pub(crate) struct Slid {
+    /// The value moved (while the finger is down too).
+    pub changed: bool,
+    /// The finger let go after moving it, or tapped the track: the time to apply it.
+    pub released: bool,
+}
+
+/// A phone's slider, as the system's: its name with the value at the right on one line, then a
+/// thin track the width of the page, filled with the accent up to a round white thumb; dragging
+/// anywhere on it or tapping it sets the value (`slider:{id}`). `log`: logarithmic (durations);
+/// `step`: the value snaps to it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn phone_slider(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    log: bool,
+    step: Option<f64>,
+    text: impl Fn(f64) -> String,
+) -> Slid {
+    let t = Tokens::get(ui.ctx());
+    let (lo, hi) = (*range.start(), *range.end());
+    let w = ui.available_width();
+    let (head, _) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::hover());
+    let label = crate::i18n::tr(label);
+    ui.painter().text(egui::pos2(head.left() + 4.0, head.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), t.text);
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::click_and_drag());
+    register(ui, format!("slider:{id}"), r);
+    const THUMB: f32 = 14.0;
+    let track = egui::Rect::from_min_max(egui::pos2(r.left() + THUMB, r.center().y - 2.0), egui::pos2(r.right() - THUMB, r.center().y + 2.0));
+    let log = log && lo > 0.0 && hi > lo;
+    let to_t = |v: f64| {
+        let v = v.clamp(lo, hi);
+        if log {
+            (v / lo).ln() / (hi / lo).ln()
+        } else if hi > lo {
+            (v - lo) / (hi - lo)
+        } else {
+            0.0
         }
+    };
+    let from_t = |f: f64| {
+        let f = f.clamp(0.0, 1.0);
+        let v = if log { lo * (hi / lo).powf(f) } else { lo + (hi - lo) * f };
+        let v = match step {
+            Some(s) if s > 0.0 => lo + ((v - lo) / s).round() * s,
+            _ => v,
+        };
+        v.clamp(lo, hi)
+    };
+    let before = *value;
+    if (resp.dragged() || resp.clicked() || resp.is_pointer_button_down_on())
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        *value = from_t(f64::from((p.x - track.left()) / track.width().max(1.0)));
     }
-    ui.data_mut(|d| d.insert_temp(key, open));
-    out
+    let shown = text(*value);
+    resp.widget_info(|| egui::WidgetInfo::slider(true, *value, label));
+    ui.painter().text(egui::pos2(head.right() - 4.0, head.center().y), egui::Align2::RIGHT_CENTER, shown, t.font(16.0), t.text_dim);
+    let p = ui.painter();
+    let x = track.left() + track.width() * to_t(*value) as f32;
+    p.rect_filled(track, 2.0, t.text_dim.gamma_multiply(0.35));
+    p.rect_filled(egui::Rect::from_min_max(track.min, egui::pos2(x, track.max.y)), 2.0, t.accent);
+    let c = egui::pos2(x, track.center().y);
+    p.circle_filled(c + egui::vec2(0.0, 1.5), THUMB, egui::Color32::from_black_alpha(50));
+    p.circle_filled(c, THUMB, egui::Color32::WHITE);
+    p.circle_stroke(c, THUMB, egui::Stroke::new(0.5, egui::Color32::from_black_alpha(40)));
+    let changed = *value != before;
+    Slid { changed, released: resp.drag_stopped() || (resp.clicked() && !resp.dragged()) }
 }
 
 #[cfg(test)]

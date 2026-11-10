@@ -9,11 +9,11 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     if super::widgets::phone_list(ui) {
         // upright on a phone: Language and the one chosen, which opens the list
         heading(ui, t, crate::i18n::tr("Language"));
-        let shown = languages.iter().find(|(l, _)| *l == app.ui.language).map_or("", |(_, n)| *n);
-        let mut pick = app.ui.language;
-        let list = |ui: &mut egui::Ui| super::widgets::tick_list(ui, "settingsLanguageList", &languages, &mut pick, |_| None).then_some(());
-        if super::widgets::disclosure(ui, "settingsLanguage", "Language", shown, list).is_some() {
-            app.ui.language = pick;
+        let current = languages.iter().position(|(l, _)| *l == app.ui.language);
+        let shown = current.and_then(|i| languages.get(i)).map_or("", |(_, n)| *n);
+        let options = languages.iter().map(|(_, n)| ((*n).to_string(), false)).collect();
+        if let Some((l, _)) = super::widgets::disclosure(ui, "settingsLanguage", "Language", shown, options, current).and_then(|i| languages.get(i)) {
+            app.ui.language = *l;
         }
     } else {
         row(ui, t, crate::i18n::tr("Language"), |ui| {
@@ -198,13 +198,24 @@ pub(super) fn preset_combo(
     };
     let text = current.map(name).unwrap_or_else(|| crate::i18n::tr(none_label).to_string());
     if super::widgets::phone_list(ui) {
-        // upright on a phone: the row opens the presets under it
-        let picked = super::widgets::disclosure(ui, id, label, &text, |ui| {
-            if super::widgets::tick_row(ui, &format!("{id}-none"), crate::i18n::tr(none_label), current.is_none()) {
-                return Some(None);
+        // upright on a phone: the row opens the presets as a page, in their groups
+        let mut options = vec![(crate::i18n::tr(none_label).to_string(), false)];
+        let mut ids: Vec<Option<String>> = vec![None];
+        let mut group: Option<&str> = None;
+        for p in app.session.presets.iter() {
+            if group != Some(p.group.as_str()) {
+                group = Some(&p.group);
+                options.push((crate::i18n::builtin_label(&p.group, p.builtin).to_string(), true));
+                ids.push(None);
             }
-            crate::panels::presets::picker_rows(ui, id, &app.session.presets, current).map(Some)
-        });
+            options.push((crate::i18n::builtin_label(&p.name, p.builtin).to_string(), false));
+            ids.push(Some(p.id.clone()));
+        }
+        let at = match current {
+            None => Some(0),
+            Some(c) => ids.iter().position(|i| i.as_deref() == Some(c)),
+        };
+        let picked = super::widgets::disclosure(ui, id, label, &text, options, at).and_then(|i| ids.get(i).cloned());
         return picked.filter(|v| v.as_deref() != current);
     }
     let mut out = None;

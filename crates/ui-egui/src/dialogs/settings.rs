@@ -133,7 +133,9 @@ fn phone_sections(ui: &mut egui::Ui, tab: &mut String, tabs: &[(&'static str, &'
         // shown again: a plain Settings (General) starts on the list; one opened on a section
         // (AI Denoise from its panel, Faces …) goes straight to its page
         open = tab != "general";
+        widgets::close_subpage(ui.ctx());
     }
+    let sub = widgets::subpage(ui.ctx());
     // the header: ‹ on a page, its name (or Settings) in the middle, ✕ at the right
     let w = ui.available_width();
     let (bar, _) = ui.allocate_exact_size(egui::vec2(w, 48.0), egui::Sense::hover());
@@ -148,12 +150,20 @@ fn phone_sections(ui: &mut egui::Ui, tab: &mut String, tabs: &[(&'static str, &'
         crate::icons::paint(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(20.0, 20.0)), icon, t.text);
         resp.clicked()
     };
-    let title = tabs.iter().find(|(id, _)| open && id == tab).map_or(crate::i18n::tr("Settings"), |(_, label)| crate::i18n::tr(label));
+    // (a list a row opened is a page under the section's: its name, ‹ back to the section)
+    let title = match &sub {
+        Some(page) if open => page.title.as_str(),
+        _ => tabs.iter().find(|(id, _)| open && id == tab).map_or(crate::i18n::tr("Settings"), |(_, label)| crate::i18n::tr(label)),
+    };
     ui.painter().text(bar.center(), egui::Align2::CENTER_CENTER, title, t.semibold(17.0), t.text);
     let mut list = !open;
-    if open && icon_button(ui, "button:settingsBack", bar.left() + 18.0, crate::icons::Icon::ChevronLeft, crate::i18n::tr("All Settings")) {
-        open = false;
-        list = true;
+    if open && icon_button(ui, "button:settingsBack", bar.left() + 18.0, crate::icons::Icon::ChevronLeft, crate::i18n::tr("Back")) {
+        if sub.is_some() {
+            widgets::close_subpage(ui.ctx());
+        } else {
+            open = false;
+            list = true;
+        }
     }
     if icon_button(ui, "button:settingsClose", bar.right() - 18.0, crate::icons::Icon::Close, crate::i18n::tr("Close")) {
         ui.data_mut(|d| d.insert_temp(egui::Id::unique("settings-phone-close"), true));
@@ -210,6 +220,18 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
         // a phone held upright: the sections as a list, a section's page with ‹ back to it (held
         // sideways it has the width for the tab bar)
         if phone_sections(ui, tab, &tabs) {
+            return;
+        }
+        // a list a row opened, in place of the section's page
+        if let Some(page) = widgets::subpage(ui.ctx()) {
+            ui.separator();
+            egui::ScrollArea::vertical().id_salt(("settings-subpage", page.id.as_str())).max_height(max_height).auto_shrink([false, false]).show(
+                ui,
+                |ui| {
+                    widgets::subpage_list(ui, &page);
+                    register(ui, "settings:subpage", ui.min_rect());
+                },
+            );
             return;
         }
     } else {

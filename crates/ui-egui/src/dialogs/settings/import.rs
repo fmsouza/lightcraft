@@ -124,14 +124,14 @@ fn other_and_metadata(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d:
         let cur = d.metadata_preset.clone();
         let shown = cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into());
         let names: Vec<String> = app.session.metadata_presets.iter().map(|m| m.name.clone()).collect();
-        let pick = super::widgets::disclosure(ui, "settingsMetaPreset", "Metadata preset", &shown, |ui| {
-            if super::widgets::tick_row(ui, "settingsMetaPreset-none", crate::i18n::tr("None"), cur.is_none()) {
-                return Some(String::new());
-            }
-            names.iter().enumerate().find_map(|(i, n)| {
-                super::widgets::tick_row(ui, &format!("settingsMetaPreset-{i}"), n, cur.as_deref() == Some(n.as_str())).then(|| n.clone())
-            })
-        });
+        let mut options = vec![(crate::i18n::tr("None").to_string(), false)];
+        options.extend(names.iter().map(|n| (n.clone(), false)));
+        let at = match &cur {
+            None => Some(0),
+            Some(c) => names.iter().position(|n| n == c).map(|i| i + 1),
+        };
+        let pick = super::widgets::disclosure(ui, "settingsMetaPreset", "Metadata preset", &shown, options, at)
+            .map(|i| if i == 0 { String::new() } else { names.get(i - 1).cloned().unwrap_or_default() });
         if let Some(n) = pick {
             let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
         }

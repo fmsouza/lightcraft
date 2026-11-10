@@ -1500,8 +1500,10 @@ fn mobile_settings(tab: &str) -> Headless {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(h.app.run("app.settings", json!({"tab": tab})).is_ok());
-    h.step();
-    h.step();
+    // (past the sheet's slide up: headless time moves a frame at a time)
+    for _ in 0..60 {
+        h.step();
+    }
     h
 }
 
@@ -1650,20 +1652,45 @@ fn phone_interface_is_a_phones_display_settings() {
 }
 
 #[test]
-fn phone_language_opens_its_list_in_place() {
+fn phone_language_opens_its_own_page() {
     let mut h = mobile_settings("general");
     click(&mut h, "button:settingsTab-general");
-    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("button:settingsLanguageList-")), "closed at first");
     click(&mut h, "combo:settingsLanguage");
+    // the languages take the page, as a phone's settings push one
+    assert!(widget(&h, "settings:subpage").is_some(), "a page of its own");
+    assert!(widget(&h, "combo:settingsLanguage").is_none() && widget(&h, "settings:page").is_none(), "in place of General");
     let languages = crate::i18n::Locale::for_picker();
     let fr = languages.iter().position(|l| *l == crate::i18n::Locale::Fr).expect("French is offered");
-    let row = widget(&h, &format!("button:settingsLanguageList-{fr}")).expect("the list opened under it");
+    let row = widget(&h, &format!("button:settingsLanguageList-{fr}")).expect("its row");
     assert!(row.height() >= 44.0, "{row:?}");
+    // ‹ goes back to General without a change
+    click(&mut h, "button:settingsBack");
+    assert!(widget(&h, "combo:settingsLanguage").is_some(), "back on General");
+    assert_eq!(h.app.ui.language, crate::i18n::Locale::En);
+    // a pick goes back too, and takes effect
+    click(&mut h, "combo:settingsLanguage");
     click(&mut h, &format!("button:settingsLanguageList-{fr}"));
+    h.step();
     assert_eq!(h.app.ui.language, crate::i18n::Locale::Fr);
-    assert!(widget(&h, &format!("button:settingsLanguageList-{fr}")).is_none(), "a pick closes it");
+    assert!(widget(&h, "settings:subpage").is_none() && widget(&h, "combo:settingsLanguage").is_some(), "back on General");
     h.app.ui.language = crate::i18n::Locale::En;
     crate::i18n::set_language(crate::i18n::Locale::En);
+}
+
+#[test]
+fn phone_cache_slider_is_the_systems_kind() {
+    let mut h = mobile_settings("performance");
+    let r = widget(&h, "slider:settingsCache").expect("the slider");
+    let page = widget(&h, "settings:page").expect("the page");
+    assert!(r.width() > page.width() - 20.0 && r.height() >= 40.0, "the width of the page, a finger tall: {r:?}");
+    // a tap at the far right sets the most, applied at once
+    let at = egui::pos2(r.right() - 2.0, r.center().y);
+    let res = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+    assert_eq!(res["ok"], true, "{res}");
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.app.session.cache_bytes() >> 20, 8192);
 }
 
 #[test]

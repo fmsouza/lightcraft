@@ -1,4 +1,4 @@
-use super::display::duration_slider;
+use super::display::{duration_slider, phone_duration_slider};
 use super::widgets::{check, choices, heading, hint, row};
 use super::{LightcraftApp, Tokens, Value, json, register};
 
@@ -63,12 +63,17 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         "A manual slideshow shows each slide until → or ← changes it. Exports still use the slide duration."
     };
     hint(ui, t, crate::i18n::tr(manual));
-    row(ui, t, crate::i18n::tr("Slide duration"), |ui| {
-        duration_slider(app, ui, "slideshowSlide", "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX)
-    });
-    row(ui, t, crate::i18n::tr("Fade duration"), |ui| {
-        duration_slider(app, ui, "slideshowFade", "fadeDuration", s.fade_duration, 0.0..=FADE_MAX.min(s.slide_duration))
-    });
+    if super::widgets::phone_list(ui) {
+        phone_duration_slider(app, ui, ("slideshowSlide", "Slide duration"), "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX);
+        phone_duration_slider(app, ui, ("slideshowFade", "Fade duration"), "fadeDuration", s.fade_duration, 0.0..=FADE_MAX.min(s.slide_duration));
+    } else {
+        row(ui, t, crate::i18n::tr("Slide duration"), |ui| {
+            duration_slider(app, ui, "slideshowSlide", "slideDuration", s.slide_duration, SLIDE_MIN..=SLIDE_MAX)
+        });
+        row(ui, t, crate::i18n::tr("Fade duration"), |ui| {
+            duration_slider(app, ui, "slideshowFade", "fadeDuration", s.fade_duration, 0.0..=FADE_MAX.min(s.slide_duration))
+        });
+    }
     hint(ui, t, crate::i18n::tr("A slide stays up for its duration, its fade in included. A fade of 0 cuts."));
     row(ui, t, crate::i18n::tr("Fade"), |ui| {
         #[derive(Clone, Copy, PartialEq)]

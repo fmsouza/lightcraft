@@ -187,12 +187,30 @@ pub(super) fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &s
     let mut v = value;
     let r = ui.add(egui::Slider::new(&mut v, range).logarithmic(key == "slideDuration").suffix(" s").max_decimals(1));
     register(ui, format!("slider:{id}"), r.rect);
-    if r.changed()
-        && let Ok(next) = app.session.slideshow.merged(&json!({ key: v }))
-    {
+    apply_duration(app, key, v, r.changed(), r.drag_stopped() || (r.changed() && !r.dragged()));
+}
+
+/// [`duration_slider`] upright on a phone: the system's kind of slider, named by `label`.
+pub(super) fn phone_duration_slider(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    (id, label): (&str, &str),
+    key: &str,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+) {
+    let mut v = value;
+    let secs = |v: f64| format!("{v:.1} s");
+    let slid = super::widgets::phone_slider(ui, id, label, &mut v, range, key == "slideDuration", Some(0.1), secs);
+    apply_duration(app, key, v, slid.changed, slid.released);
+}
+
+/// Show a slideshow duration as it moves, and keep it once it is let go.
+fn apply_duration(app: &mut LightcraftApp, key: &str, v: f64, changed: bool, released: bool) {
+    if changed && let Ok(next) = app.session.slideshow.merged(&json!({ key: v })) {
         app.session.slideshow = next;
     }
-    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+    if released {
         let _ = app.run("slideshow.playback", json!({ key: v }));
     }
 }
