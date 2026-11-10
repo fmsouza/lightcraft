@@ -563,11 +563,6 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// Rate (the Rate sheet, for the photo last tapped) and Make Candidate the Select. Returns what is
 /// left above it for the photos.
 fn phone_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, sel: PhotoId, cand: PhotoId) -> Rect {
-    const BAR_H: f32 = 60.0;
-    let t = Tokens::get(ui.ctx());
-    let bar = Rect::from_min_max(pos2(canvas.left(), canvas.bottom() - BAR_H), canvas.max);
-    ui.painter().rect_filled(bar, 0.0, t.chrome);
-    register(ui, "panel:compareBar", bar);
     let buttons: [(&str, Icon, &str); 5] = [
         ("comparePrevious", Icon::ChevronLeft, "Previous"),
         ("compareSwap", Icon::Flip, "Swap"),
@@ -575,21 +570,8 @@ fn phone_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, sel: Phot
         ("compareMakeSelect", Icon::Check, "Make Select"),
         ("compareNext", Icon::ChevronRight, "Next"),
     ];
-    let w = bar.width() / buttons.len() as f32;
-    for (i, (id, icon, label)) in buttons.into_iter().enumerate() {
-        let r = Rect::from_min_size(pos2(bar.left() + i as f32 * w, bar.top()), vec2(w, BAR_H));
-        let resp = ui.interact(r, egui::Id::unique(("compare-bar", id)), Sense::click());
-        register(ui, format!("button:{id}"), r);
-        crate::widgets::announce(&resp, crate::i18n::tr(label));
-        let p = ui.painter();
-        if resp.is_pointer_button_down_on() {
-            p.rect_filled(r.shrink(2.0), 8.0, t.hover);
-        }
-        paint(p, Rect::from_center_size(pos2(r.center().x, r.top() + 22.0), vec2(20.0, 20.0)), icon, t.icon);
-        p.text(pos2(r.center().x, r.bottom() - 12.0), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(11.0), t.text_label);
-        if !resp.clicked() {
-            continue;
-        }
+    let (rest, pressed) = button_bar(ui, canvas, "panel:compareBar", &buttons);
+    if let Some(id) = pressed {
         let r = match id {
             "comparePrevious" => compare_step(app, -1),
             "compareNext" => compare_step(app, 1),
@@ -606,7 +588,58 @@ fn phone_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, sel: Phot
             app.toast(ui.ctx(), e);
         }
     }
-    Rect::from_min_max(canvas.min, pos2(canvas.right(), bar.top()))
+    rest
+}
+
+/// A phone's bar of finger-sized buttons (an icon over its name) along the bottom of `canvas`,
+/// registered as `panel` and `button:<id>`: what is left above it, and the button tapped.
+fn button_bar(ui: &mut egui::Ui, canvas: Rect, panel: &str, buttons: &[(&'static str, Icon, &str)]) -> (Rect, Option<&'static str>) {
+    const BAR_H: f32 = 60.0;
+    let t = Tokens::get(ui.ctx());
+    let bar = Rect::from_min_max(pos2(canvas.left(), canvas.bottom() - BAR_H), canvas.max);
+    ui.painter().rect_filled(bar, 0.0, t.chrome);
+    register(ui, panel, bar);
+    let w = bar.width() / buttons.len().max(1) as f32;
+    let mut pressed = None;
+    for (i, (id, icon, label)) in buttons.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(bar.left() + i as f32 * w, bar.top()), vec2(w, BAR_H));
+        let resp = ui.interact(r, egui::Id::unique(("phone-bar", *id)), Sense::click());
+        register(ui, format!("button:{id}"), r);
+        crate::widgets::announce(&resp, crate::i18n::tr(label));
+        let p = ui.painter();
+        if resp.is_pointer_button_down_on() {
+            p.rect_filled(r.shrink(2.0), 8.0, t.hover);
+        }
+        paint(p, Rect::from_center_size(pos2(r.center().x, r.top() + 22.0), vec2(20.0, 20.0)), *icon, t.icon);
+        p.text(pos2(r.center().x, r.bottom() - 12.0), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(11.0), t.text_label);
+        if resp.clicked() {
+            pressed = Some(*id);
+        }
+    }
+    (Rect::from_min_max(canvas.min, pos2(canvas.right(), bar.top())), pressed)
+}
+
+/// The phone's Survey bar: Rate (the Rate sheet), Remove from the survey and Edit (the editor),
+/// for the photo last tapped (the first until one is). Returns what is left above it.
+fn survey_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, photos: &[PhotoId]) -> Rect {
+    let buttons: [(&str, Icon, &str); 3] =
+        [("surveyRate", Icon::Star, "Rate"), ("surveyRemove", Icon::Close, "Remove"), ("surveyEdit", Icon::Pencil, "Edit")];
+    let (rest, pressed) = button_bar(ui, canvas, "panel:surveyBar", &buttons);
+    let Some(id) = pressed else { return rest };
+    let Some(target) = app.session.selection.active.filter(|a| photos.contains(a)).or_else(|| photos.first().copied()) else { return rest };
+    match id {
+        "surveyRate" => super::rate_sheet::open(ui.ctx(), vec![target]),
+        // (the last photo stays: a survey of none is no survey)
+        "surveyRemove" if photos.len() > 1 => {
+            let _ = app.run("library.select", json!({"ids": [target.0], "mode": "toggle"}));
+        }
+        "surveyEdit" => {
+            let _ = app.run("library.select", json!({"ids": [target.0]}));
+            app.ui.view = ViewMode::Detail;
+        }
+        _ => {}
+    }
+    rest
 }
 
 /// Columns for `n` tiles of aspect ~3:2 in `area`, maximizing the tile size.
@@ -632,6 +665,8 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         super::empty_message(ui, canvas, "Nothing to survey", "Select photos, then choose View → Survey (N)");
         return;
     }
+    let upright = super::compact::is_compact(ui.ctx()) && canvas.width() < super::compact::COMPACT_WIDTH;
+    let canvas = if upright { survey_bar(app, ui, canvas, &photos) } else { canvas };
     let area = canvas.shrink(14.0);
     let cols = survey_columns(photos.len(), area);
     let rows = photos.len().div_ceil(cols);
@@ -657,11 +692,15 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         // remove from the survey (deselect) on hover; always there on a touch screen
         if (resp.hovered() || crate::widgets::touch_screen(ui.ctx())) && photos.len() > 1 {
-            let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
-            let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
+            // (a finger's: a larger circle, and a 44 pt target round it)
+            let d = if upright { 30.0 } else { 20.0 };
+            let xr = Rect::from_min_size(pos2(img.right() - d - 6.0, img.top() + 6.0), vec2(d, d));
+            let hit = if upright { xr.expand(7.0) } else { xr };
+            let xresp = ui.interact(hit, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
+            register(ui, format!("button:surveyX:{}", id.0), hit);
             crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
-            ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
-            paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);
+            ui.painter().circle_filled(xr.center(), d / 2.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
+            paint(ui.painter(), xr.shrink(d * 0.2), Icon::Close, t.text);
             if xresp.clicked() {
                 let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }

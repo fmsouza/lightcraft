@@ -1444,3 +1444,26 @@ fn phone_compare_stacks_the_photos_over_a_bar_of_buttons() {
     click(&mut h, "button:compareRate");
     assert!(widget(&h, "panel:rateSheet").is_some(), "Rate opens the Rate sheet");
 }
+
+#[test]
+fn phone_survey_has_a_bar_for_the_photo_last_tapped() {
+    let mut h = grid_phone();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(4).map(|p| p.0).collect();
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.view = ViewMode::Survey;
+    touch_screen(&mut h);
+    for id in ["button:surveyRate", "button:surveyRemove", "button:surveyEdit"] {
+        assert!(widget(&h, id).unwrap_or_else(|| panic!("{id}")).height() >= 44.0, "{id}");
+    }
+    let x = widget(&h, &format!("button:surveyX:{}", ids[1])).expect("each photo's ✕ on a touch screen");
+    assert!(x.width() >= 44.0 && x.height() >= 44.0, "a finger's ✕: {x:?}");
+    click(&mut h, "button:surveyRate");
+    assert!(widget(&h, "panel:rateSheet").is_some(), "Rate opens the Rate sheet");
+    click(&mut h, "button:rateSheetDone");
+    let before = h.app.session.selection.ids.len();
+    click(&mut h, "button:surveyRemove");
+    assert_eq!(h.app.session.selection.ids.len(), before - 1, "Remove takes a photo out of the survey");
+    click(&mut h, "button:surveyEdit");
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "Edit opens the editor");
+}
