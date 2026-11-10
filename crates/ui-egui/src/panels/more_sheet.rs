@@ -1,36 +1,39 @@
-//! The phone layout's "…" as a bottom sheet: what the screen needs most (the editor's photo
-//! settings, the library's import and selection), then **All Menus**, the desktop menu bar as
-//! pages a finger can use: a menu's items in full-width rows, a submenu opens as the next page,
-//! ‹ goes back. It draws [`crate::menubar::menu_bar`], so every desktop command is here with the
-//! same enabled state and check marks; commands that get a phone screen of their own move out of
-//! it into the first page (or a sheet of their own) over time.
+//! The phone layout's "…" as a bottom sheet, for a host without a menu of its own (Android,
+//! tests): the same list as the host's menu ([`crate::native_menu::more_items`]), drawn for a
+//! finger. Sections show their title as a small header, rows have check marks, disabled and
+//! destructive states, and a submenu opens as the next page with ‹ to go back.
 
 use egui::{Rect, Sense, Stroke, vec2};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::menubar::MenuNode;
+use crate::native_menu::NativeItem;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
-/// Where the sheet is: the first page of `quick` actions, or All Menus at `path` (menu titles
-/// and submenu labels from the top; empty: the menu titles).
+/// Height of a row: a finger's.
+const ROW_H: f32 = 44.0;
+/// Height of a section's title.
+const HEADER_H: f32 = 26.0;
+/// Height of the line between sections without a title.
+const GAP_H: f32 = 9.0;
+
+/// Where the sheet is: the editor's or the library's "…", and the submenus open from the top.
 #[derive(Clone, Debug, PartialEq)]
 struct State {
-    quick: &'static [(&'static str, &'static str)],
-    /// The quick actions need a photo (the editor's).
-    needs_photo: bool,
-    menus: Option<Vec<String>>,
+    editor: bool,
+    path: Vec<String>,
 }
 
 fn state_id() -> egui::Id {
     egui::Id::unique("compact-more-sheet")
 }
 
-/// Open the sheet on its first page with `quick` (command id, label) rows.
-pub fn open(ctx: &egui::Context, quick: &'static [(&'static str, &'static str)], needs_photo: bool) {
-    ctx.data_mut(|d| d.insert_temp(state_id(), State { quick, needs_photo, menus: None }));
+/// Open the sheet on its first page: the editor's "…" or the library's.
+pub fn open(ctx: &egui::Context, editor: bool) {
+    ctx.data_mut(|d| d.insert_temp(state_id(), State { editor, path: Vec::new() }));
 }
 
 pub fn is_open(ctx: &egui::Context) -> bool {
@@ -57,24 +60,18 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         .corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 })
         .inner_margin(egui::Margin { left: 12, right: 12, top: 6, bottom: 16 });
     let body_max = (screen.height() * 0.7 - 60.0).max(160.0);
+    let items = crate::native_menu::more_items(app, st.editor);
     let mut run: Option<(String, Value)> = None;
     let mut closing = false;
     let modal = egui::Modal::new(egui::Id::unique("compact-more-modal")).area(area).frame(frame).show(ctx, |ui| {
         ui.set_width(width - 24.0);
         register(ui, "panel:moreSheet", ui.max_rect());
-        match st.menus.clone() {
-            None => first_page(app, ui, &mut st, &mut run, &mut closing),
-            Some(path) => menu_page(app, ui, &mut st, &path, &mut run, body_max),
-        }
+        page(ui, &items, &mut st, &mut run, &mut closing, body_max);
     });
     if modal.should_close() {
-        match st.menus.as_mut() {
-            // Escape or a tap outside goes back a page, then closes
-            Some(path) if !path.is_empty() => {
-                path.pop();
-            }
-            Some(_) => st.menus = None,
-            None => closing = true,
+        // Escape or a tap outside goes back a page, then closes
+        if st.path.pop().is_none() {
+            closing = true;
         }
     }
     if closing || run.is_some() {
@@ -86,6 +83,108 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         && let Err(e) = crate::menubar::run_item(app, &id, params)
     {
         app.toast(ctx, e);
+    }
+}
+
+/// The items of the page at `path` (submenu labels from the top) and its title; a submenu that
+/// has gone (the menu changes with the screen) gives its parent's page.
+fn page_items<'a>(items: &'a [NativeItem], path: &mut Vec<String>) -> (&'a [NativeItem], Option<String>) {
+    fn child<'a>(items: &'a [NativeItem], label: &str) -> Option<&'a [NativeItem]> {
+        items.iter().find_map(|i| match i {
+            NativeItem::Submenu { label: l, items, .. } if l == label => Some(items.as_slice()),
+            NativeItem::Section { items, .. } => child(items, label),
+            _ => None,
+        })
+    }
+    let mut page = items;
+    for (depth, label) in path.iter().enumerate() {
+        match child(page, label) {
+            Some(next) => page = next,
+            None => {
+                path.truncate(depth);
+                break;
+            }
+        }
+    }
+    (page, path.last().cloned())
+}
+
+/// The height the rows of `items` take.
+fn height(items: &[NativeItem]) -> f32 {
+    items
+        .iter()
+        .map(|i| match i {
+            NativeItem::Section { title, items } => (if title.is_empty() { GAP_H } else { HEADER_H }) + height(items),
+            _ => ROW_H,
+        })
+        .sum()
+}
+
+fn page(ui: &mut egui::Ui, items: &[NativeItem], st: &mut State, run: &mut Option<(String, Value)>, closing: &mut bool, body_max: f32) {
+    let (rows, title) = page_items(items, &mut st.path);
+    let back = title.is_some();
+    if head(ui, back, title.as_deref().unwrap_or_else(|| crate::i18n::tr("More"))) {
+        if back {
+            st.path.pop();
+        } else {
+            *closing = true;
+        }
+        return;
+    }
+    let mut open: Option<String> = None;
+    // the page's own height (up to `body_max`), not what the last page left: the sheet's area
+    // remembers its size, so a short page would otherwise squeeze the next one into a sliver
+    let h = height(rows).min(body_max);
+    // (a scroll state per page)
+    egui::ScrollArea::vertical()
+        .id_salt(("more-sheet", st.editor, &st.path))
+        .max_height(body_max)
+        .min_scrolled_height(h)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (i, item) in rows.iter().enumerate() {
+                match item {
+                    NativeItem::Section { title, items } => {
+                        if !title.is_empty() {
+                            header(ui, title);
+                        } else if i > 0 {
+                            gap(ui);
+                        }
+                        for item in items {
+                            item_row(ui, item, run, &mut open);
+                        }
+                    }
+                    item => item_row(ui, item, run, &mut open),
+                }
+            }
+        });
+    if let Some(next) = open {
+        st.path.push(next);
+    }
+}
+
+/// One row: an action runs (`more:{id}`, its parameters after `|`), a submenu opens its page
+/// (`submenu:{label}`).
+fn item_row(ui: &mut egui::Ui, item: &NativeItem, run: &mut Option<(String, Value)>, open: &mut Option<String>) {
+    match item {
+        NativeItem::Action { id, params, label, enabled, checked, destructive, .. } => {
+            let key = if params.as_object().is_some_and(|o| !o.is_empty()) { MenuNode::key(id, params) } else { id.clone() };
+            if row(ui, format!("more:{key}"), label, *enabled, checked.then_some(true), false, *destructive) {
+                *run = Some((id.clone(), params.clone()));
+            }
+        }
+        NativeItem::Submenu { label, items, .. } => {
+            if row(ui, format!("submenu:{label}"), label, !items.is_empty(), None, true, false) {
+                *open = Some(label.clone());
+            }
+        }
+        // (sections nest only at the top of a page)
+        NativeItem::Section { items, .. } => {
+            for item in items {
+                item_row(ui, item, run, open);
+            }
+        }
     }
 }
 
@@ -104,18 +203,31 @@ fn head(ui: &mut egui::Ui, back: bool, title: &str) -> bool {
     left
 }
 
-/// A full-width row: a check mark gutter, the label, and › for a page; true when tapped.
-fn row(ui: &mut egui::Ui, id: String, label: &str, enabled: bool, checked: Option<bool>, page: bool) -> bool {
+/// A section's title: small and dim, over its rows.
+fn header(ui: &mut egui::Ui, title: &str) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
+    crate::widgets::register_geometry(ui.ctx(), format!("moreHeader:{title}"), r);
+    ui.painter().text(egui::pos2(r.left() + 8.0, r.bottom() - 5.0), egui::Align2::LEFT_BOTTOM, title, t.semibold(13.0), t.text_dim);
+}
+
+/// A full-width row: a check mark gutter, the label (red when `destructive`), and › for a page;
+/// true when tapped.
+pub(crate) fn row(ui: &mut egui::Ui, id: String, label: &str, enabled: bool, checked: Option<bool>, page: bool, destructive: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 48.0), if enabled { Sense::click() } else { Sense::hover() });
+    let (r, resp) = ui.allocate_exact_size(vec2(w, ROW_H), if enabled { Sense::click() } else { Sense::hover() });
     register(ui, id, r);
     crate::widgets::announce_selected(&resp, label, checked == Some(true));
     let p = ui.painter();
     if enabled && resp.is_pointer_button_down_on() {
         p.rect_filled(r, 8.0, t.hover);
     }
-    let color = if enabled { t.text } else { t.text_disabled };
+    let color = match (enabled, destructive) {
+        (false, _) => t.text_disabled,
+        (true, true) => t.reject,
+        (true, false) => t.text,
+    };
     if checked == Some(true) {
         paint(p, Rect::from_center_size(egui::pos2(r.left() + 14.0, r.center().y), vec2(16.0, 16.0)), Icon::Check, color);
     }
@@ -132,107 +244,8 @@ fn row(ui: &mut egui::Ui, id: String, label: &str, enabled: bool, checked: Optio
 /// A thin line between groups of rows.
 fn gap(ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 9.0), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), GAP_H), Sense::hover());
     ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, t.divider));
-}
-
-fn first_page(app: &LightcraftApp, ui: &mut egui::Ui, st: &mut State, run: &mut Option<(String, Value)>, closing: &mut bool) {
-    if head(ui, false, crate::i18n::tr("More")) {
-        *closing = true;
-        return;
-    }
-    let enabled = !st.needs_photo || app.session.active().is_some();
-    for (id, label) in st.quick {
-        if row(ui, format!("more:{id}"), crate::i18n::tr(label), enabled, None, false) {
-            *run = Some(((*id).to_string(), json!({})));
-        }
-        // the destructive one apart from the rest
-        if *id == "dialog.rename" {
-            gap(ui);
-        }
-    }
-    // (a host with a native menu bar, the desktop, keeps its own)
-    if !app.native_menu {
-        gap(ui);
-        if row(ui, "more:allMenus".into(), crate::i18n::tr("All Menus"), true, None, true) {
-            st.menus = Some(Vec::new());
-        }
-    }
-}
-
-/// All Menus at `path`: the menu titles, or a menu's (or submenu's) items.
-fn menu_page(app: &LightcraftApp, ui: &mut egui::Ui, st: &mut State, path: &[String], run: &mut Option<(String, Value)>, body_max: f32) {
-    let bar = crate::menubar::menu_bar(app);
-    let title = path.last().map_or_else(|| crate::i18n::tr("All Menus").to_string(), |l| crate::i18n::tr(l).to_string());
-    if head(ui, true, &title) {
-        st.menus = path.split_last().map(|(_, rest)| rest.to_vec()).filter(|_| !path.is_empty());
-        return;
-    }
-    let mut open: Option<String> = None;
-    // the page's own height (up to `body_max`), not what the last page left: the sheet's area
-    // remembers its size, so a short page would otherwise squeeze the next one into a sliver
-    let height = (page_nodes(&bar, path).map_or(bar.len(), <[MenuNode]>::len) as f32 * 48.0).min(body_max);
-    // (a scroll state per page)
-    egui::ScrollArea::vertical().id_salt(("more-sheet", path)).max_height(body_max).min_scrolled_height(height).auto_shrink([false, true]).show(
-        ui,
-        |ui| {
-            if path.is_empty() {
-                for (menu, _) in &bar {
-                    if row(ui, format!("menu:{menu}"), crate::i18n::tr(menu), true, None, true) {
-                        open = Some(menu.clone());
-                    }
-                }
-                return;
-            }
-            let Some(nodes) = page_nodes(&bar, path) else { return };
-            let mut last_gap = true;
-            for n in nodes {
-                match n {
-                    MenuNode::Separator => {
-                        if !last_gap {
-                            gap(ui);
-                            last_gap = true;
-                        }
-                    }
-                    MenuNode::Submenu { label, children } => {
-                        last_gap = false;
-                        if row(ui, format!("submenu:{label}"), crate::i18n::tr(label), !children.is_empty(), None, true) {
-                            open = Some(label.clone());
-                        }
-                    }
-                    MenuNode::Item { id, params, label, enabled, checked, .. } => {
-                        last_gap = false;
-                        let shown = crate::menubar::display_item_label(id, params, label);
-                        if row(ui, format!("menuitem:{id}"), shown, *enabled, *checked, false) {
-                            *run = Some((id.clone(), params.clone()));
-                        }
-                    }
-                }
-            }
-        },
-    );
-    if let Some(next) = open {
-        let mut p = path.to_vec();
-        p.push(next);
-        st.menus = Some(p);
-    }
-}
-
-/// The nodes of the menu at `path` (a menu title, then submenu labels); a submenu that has gone
-/// (the menus change with the screen) gives its parent's. None for the titles' page.
-fn page_nodes<'a>(bar: &'a [(String, Vec<MenuNode>)], path: &[String]) -> Option<&'a [MenuNode]> {
-    let (first, rest) = path.split_first()?;
-    let mut nodes = bar.iter().find(|(m, _)| m == first).map(|(_, n)| n.as_slice())?;
-    for label in rest {
-        match nodes.iter().find_map(|n| match n {
-            MenuNode::Submenu { label: l, children } if l == label => Some(children.as_slice()),
-            _ => None,
-        }) {
-            Some(children) => nodes = children,
-            None => break,
-        }
-    }
-    Some(nodes)
 }
 
 #[cfg(test)]
@@ -243,9 +256,35 @@ mod tests {
     fn the_sheet_opens_and_closes() {
         let ctx = egui::Context::default();
         assert!(!is_open(&ctx));
-        open(&ctx, &[("app.about", "About LightCraft")], false);
+        open(&ctx, false);
         assert!(is_open(&ctx));
         close(&ctx);
         assert!(!is_open(&ctx));
+    }
+
+    #[test]
+    fn a_page_that_has_gone_falls_back_to_its_parent() {
+        let leaf = NativeItem::Action {
+            id: "a".into(),
+            params: serde_json::json!({}),
+            label: "A".into(),
+            symbol: "",
+            enabled: true,
+            checked: false,
+            destructive: false,
+        };
+        let items = vec![NativeItem::Section {
+            title: "S".into(),
+            items: vec![NativeItem::Submenu { label: "Sub".into(), symbol: "", items: vec![leaf.clone()] }],
+        }];
+        let mut path = vec!["Sub".to_string()];
+        let (rows, title) = page_items(&items, &mut path);
+        assert_eq!(rows, std::slice::from_ref(&leaf));
+        assert_eq!(title.as_deref(), Some("Sub"));
+        let mut path = vec!["Sub".to_string(), "Gone".to_string()];
+        let (_, title) = page_items(&items, &mut path);
+        assert_eq!(path, ["Sub"], "the missing page is dropped");
+        assert_eq!(title.as_deref(), Some("Sub"));
+        assert!((height(&items) - (HEADER_H + ROW_H)).abs() < 1e-3);
     }
 }

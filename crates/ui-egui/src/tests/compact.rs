@@ -540,20 +540,115 @@ fn phone_more_menu_offers_what_the_screen_needs() {
     h.step();
     assert!((exposure(&h) - 1.0).abs() < 1e-9);
     click(&mut h, "icon:more");
-    for id in ["more:develop.copy", "more:develop.paste", "more:photo.delete", "more:allMenus"] {
+    for id in ["more:develop.copy", "more:dialog.pasteSettings", "more:develop.pastePrevious", "more:photo.delete", "submenu:Before/After"] {
         assert!(widget(&h, id).is_some(), "{id} in the editor's menu");
     }
+    for id in ["moreHeader:Edits", "moreHeader:Photo", "moreHeader:View"] {
+        assert!(widget(&h, id).is_some(), "{id}: the sections' titles");
+    }
     assert!(widget(&h, "more:file.addFolder").is_none(), "no library items in the editor");
+    assert!(widget(&h, "more:allMenus").is_none() && widget(&h, "submenu:All Menus").is_none(), "no All Menus");
     assert!(widget(&h, "menu:all").is_none() && widget(&h, "menu:File").is_none(), "no desktop menu bar");
     click(&mut h, "more:develop.reset");
     assert!(exposure(&h).abs() < 1e-9, "Reset Edits reset the exposure");
     // the library: importing and the app
     let mut h = demo(PHONE, json!({"view": "photoGrid"}));
     click(&mut h, "icon:more");
-    for id in ["more:file.addFolder", "more:library.selectAll", "more:app.settings", "more:allMenus"] {
+    for id in ["more:file.addFolder", "more:library.selectAll", "more:view.people", "more:dialog.cull", "more:edit.undo", "more:app.settings"] {
         assert!(widget(&h, id).is_some(), "{id} in the library's menu");
     }
+    for id in ["moreHeader:Select", "moreHeader:Add photos", "moreHeader:View options", "moreHeader:Review"] {
+        assert!(widget(&h, id).is_some(), "{id}: the sections' titles");
+    }
     assert!(widget(&h, "more:develop.copy").is_none(), "no editor items in the library");
+    assert!(widget(&h, "more:library.emptyRecentlyDeleted").is_none(), "only in Recently Deleted");
+    assert!(widget(&h, "more:allMenus").is_none() && widget(&h, "submenu:All Menus").is_none(), "no All Menus");
+}
+
+/// Every id in `items`, submenus and sections included, and the submenus' labels.
+fn native_ids(items: &[crate::native_menu::NativeItem], out: &mut Vec<String>) {
+    use crate::native_menu::NativeItem as N;
+    for i in items {
+        match i {
+            N::Action { id, .. } => out.push(id.clone()),
+            N::Section { items, .. } => native_ids(items, out),
+            N::Submenu { label, items, .. } => {
+                out.push(format!("submenu:{label}"));
+                native_ids(items, out);
+            }
+        }
+    }
+}
+
+#[test]
+fn phone_more_items_hold_each_screens_commands() {
+    let h = demo(PHONE, json!({"view": "photoGrid"}));
+    let mut ids = Vec::new();
+    native_ids(&crate::native_menu::more_items(&h.app, false), &mut ids);
+    for id in [
+        "view.selectMode",
+        "library.selectAll",
+        "file.addPhotos",
+        "file.addFolder",
+        "view.photoGrid",
+        "view.squareGrid",
+        "submenu:Grid Info",
+        "view.gridInfo",
+        "view.people",
+        "view.slideshow",
+        "dialog.cull",
+        "edit.undo",
+        "edit.redo",
+        "app.settings",
+        "app.about",
+    ] {
+        assert!(ids.iter().any(|i| i == id), "{id} in the library's …: {ids:?}");
+    }
+    assert!(!ids.iter().any(|i| i.contains("All Menus") || i == "library.emptyRecentlyDeleted"), "{ids:?}");
+    let h = demo(PHONE, json!({"view": "detail"}));
+    let mut ids = Vec::new();
+    native_ids(&crate::native_menu::more_items(&h.app, true), &mut ids);
+    for id in [
+        "develop.copy",
+        "dialog.copySettings",
+        "develop.paste",
+        "dialog.pasteSettings",
+        "develop.pastePrevious",
+        "develop.reset",
+        "photo.rotateLeft",
+        "photo.rotateRight",
+        "photo.virtualCopy",
+        "submenu:Add to Album",
+        "dialog.newAlbum",
+        "library.findSimilar",
+        "dialog.rename",
+        "view.histogram",
+        "view.infoOverlay",
+        "submenu:Before/After",
+        "view.beforeAfter",
+        "view.beforeAfterSplit",
+        "view.beforeAfterTopBottom",
+        "view.beforeAfterSplitTopBottom",
+        "view.focusPoint",
+        "view.faceBoxes",
+        "photo.delete",
+    ] {
+        assert!(ids.iter().any(|i| i == id), "{id} in the editor's …: {ids:?}");
+    }
+    assert!(!ids.iter().any(|i| i.contains("All Menus")), "{ids:?}");
+    // Recently Deleted: Empty Recently Deleted, red
+    let mut h = demo(PHONE, json!({"view": "photoGrid"}));
+    assert!(h.app.run("library.source", json!({"kind": "recentlyDeleted"})).is_ok());
+    h.step();
+    let items = crate::native_menu::more_items(&h.app, false);
+    let empty = items.iter().find_map(|s| match s {
+        crate::native_menu::NativeItem::Section { items, .. } => items.iter().find_map(|i| match i {
+            crate::native_menu::NativeItem::Action { id, destructive, .. } if id == "library.emptyRecentlyDeleted" => Some(*destructive),
+            _ => None,
+        }),
+        _ => None,
+    });
+    assert_eq!(empty, Some(true), "Empty Recently Deleted, destructive");
 }
 
 /// A finger along `points`: down at the first, through the others a frame each, up at the last.
@@ -1147,29 +1242,100 @@ fn phone_add_border_shares_the_photo_framed() {
 }
 
 #[test]
-fn phone_all_menus_are_pages_a_finger_can_use() {
+fn phone_more_sheet_is_rows_and_pages_a_finger_can_use() {
     let mut h = grid_phone();
     click(&mut h, "icon:more");
     assert!(widget(&h, "panel:moreSheet").is_some(), "… is a sheet");
-    click(&mut h, "more:allMenus");
-    let file = widget(&h, "menu:File").expect("the menu titles");
-    assert!(file.height() >= 44.0 && file.width() > PHONE[0] * 0.8, "full-width finger rows: {file:?}");
-    click(&mut h, "menu:View");
-    assert!(widget(&h, "menu:File").is_none(), "View's page replaces the titles");
+    let row = widget(&h, "more:view.selectMode").expect("a row");
+    assert!(row.height() >= 44.0 && row.width() > PHONE[0] * 0.8, "full-width finger rows: {row:?}");
+    let head = widget(&h, "moreHeader:Select").expect("the section's title");
+    assert!(head.bottom() <= row.top() + 0.5, "over its rows: {head:?} {row:?}");
+    // a submenu is the next page, its items keep their parameters
     click(&mut h, "submenu:Grid Info");
-    assert!(widget(&h, "menuitem:view.photoGrid").is_none(), "a submenu is the next page");
-    click(&mut h, "icon:moreSheetClose");
-    click(&mut h, "menuitem:view.squareGrid");
-    assert_eq!(h.app.ui.view, ViewMode::SquareGrid, "an item runs its command");
+    assert!(widget(&h, "more:view.selectMode").is_none(), "Grid Info's page replaces the first");
+    click(&mut h, r#"more:view.gridInfo|{"info":"exposure"}"#);
+    assert_eq!(h.app.ui.grid_info, "exposure", "an item runs its command with its parameters");
     assert!(widget(&h, "panel:moreSheet").is_none(), "and the sheet closes");
-    // ‹ goes back a page at a time
+    // ‹ goes back a page, ✕ closes
     click(&mut h, "icon:more");
-    click(&mut h, "more:allMenus");
-    click(&mut h, "menu:Edit");
+    click(&mut h, "submenu:Grid Info");
     click(&mut h, "icon:moreSheetClose");
-    assert!(widget(&h, "menu:File").is_some(), "back on the titles");
-    click(&mut h, "icon:moreSheetClose");
-    assert!(widget(&h, "more:allMenus").is_some(), "back on the first page");
+    assert!(widget(&h, "more:view.selectMode").is_some(), "back on the first page");
+    click(&mut h, "more:view.squareGrid");
+    assert_eq!(h.app.ui.view, ViewMode::SquareGrid, "a row runs its command");
+    assert!(widget(&h, "panel:moreSheet").is_none(), "and the sheet closes");
+}
+
+#[test]
+fn phone_select_bar_deselects_and_restores_in_recently_deleted() {
+    let mut h = grid_phone();
+    assert!(h.app.run("view.selectMode", json!({"on": true})).is_ok());
+    assert!(h.app.run("library.selectAll", json!({})).is_ok());
+    h.step();
+    h.step();
+    assert!(widget(&h, "icon:selectDelete").is_some());
+    let deselect = widget(&h, "button:selectNone").expect("Deselect All");
+    assert!(deselect.height() >= 44.0, "a finger's height: {deselect:?}");
+    assert!(widget(&h, "button:selectRestore").is_none() && widget(&h, "icon:selectDeletePermanently").is_none());
+    let before = h.app.session.selection.ids.len();
+    click(&mut h, "button:selectNone");
+    // (as the desktop's Deselect All: the active photo stays)
+    let after = h.app.session.selection.ids.len();
+    assert!(before > 1 && after <= 1, "Deselect All: {before} → {after}");
+    // delete two, then select them in Recently Deleted
+    let ids: Vec<_> = h.app.session.visible().iter().take(2).copied().collect();
+    assert_eq!(ids.len(), 2);
+    let raw: Vec<u64> = ids.iter().map(|i| i.0).collect();
+    assert!(h.app.run("photo.delete", json!({"ids": raw})).is_ok());
+    assert!(h.app.run("library.source", json!({"kind": "recentlyDeleted"})).is_ok());
+    assert!(h.app.run("view.selectMode", json!({"on": true})).is_ok());
+    assert!(h.app.run("library.selectAll", json!({})).is_ok());
+    h.step();
+    h.step();
+    assert!(widget(&h, "icon:selectDelete").is_none(), "no Delete in Recently Deleted");
+    assert!(widget(&h, "icon:selectDeletePermanently").is_some(), "Delete Permanently");
+    click(&mut h, "button:selectRestore");
+    assert!(ids.iter().all(|&id| h.app.session.catalog.photo(id).is_some_and(|p| !p.deleted)), "Restore brings them back");
+}
+
+#[test]
+fn phone_about_has_help_rows_desktop_none() {
+    fn draw(app: &mut LightcraftApp, ctx: &egui::Context, compact: bool, input: egui::RawInput) -> Vec<(String, egui::Rect)> {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("compact-layout"), compact));
+        let mut out = ctx.run_ui(input, |ui| crate::panels::compact::about_help_rows(app, ui));
+        out.textures_delta.clear();
+        crate::widgets::take_registry(ctx)
+    }
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let ctx = egui::Context::default();
+    assert!(draw(&mut app, &ctx, false, Default::default()).is_empty(), "the desktop keeps its Help menu");
+    let rows = draw(&mut app, &ctx, true, Default::default());
+    for id in ["about:app.whatsNew", "about:app.feedback", "about:app.help", "about:app.systemInfo"] {
+        let r = rows.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("{id}: {rows:?}"));
+        assert!(r.height() >= 44.0, "{id}: a finger's row {r:?}");
+    }
+    // a tap on What's New opens it
+    let at = rows.iter().find(|(w, _)| w == "about:app.whatsNew").map(|(_, r)| r.center()).unwrap();
+    let press = |pressed| egui::RawInput {
+        events: vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() },
+        ],
+        ..Default::default()
+    };
+    draw(&mut app, &ctx, true, press(true));
+    draw(&mut app, &ctx, true, press(false));
+    assert!(matches!(app.ui.dialog, Some(crate::state::Dialog::WhatsNew)), "What's New opened");
+}
+
+#[test]
+fn desktop_keeps_its_menu_bar() {
+    let h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    assert!(!crate::panels::compact::is_compact(&h.view.ctx));
+    for id in ["menu:File", "menu:Edit", "menu:View", "menu:Photo", "menu:Help"] {
+        assert!(widget(&h, id).is_some(), "{id}: the desktop's menu bar");
+    }
+    assert!(widget(&h, "panel:moreSheet").is_none() && widget(&h, "button:selectNone").is_none(), "no phone sheet or select bar");
 }
 
 #[test]
@@ -1591,7 +1757,7 @@ fn phone_more_is_the_hosts_menu_over_the_dots() {
     let last = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().cloned().flatten();
     let (rect, items) = last.expect("the host is asked to show its menu");
     assert_eq!(Some(rect), widget(&h, "icon:more"), "over the drawn …");
-    // the library's sections, with All Menus last
+    // the library's sections
     let has = |id: &str| {
         fn walk(items: &[crate::native_menu::NativeItem], id: &str) -> bool {
             use crate::native_menu::NativeItem as N;
@@ -1603,7 +1769,8 @@ fn phone_more_is_the_hosts_menu_over_the_dots() {
         walk(&items, id)
     };
     assert!(has("app.settings") && has("view.selectMode") && has("file.addPhotos"));
-    assert!(has("app.shortcuts") || has("file.export") || has("view.slideshow"), "All Menus holds the desktop's menus");
+    assert!(has("view.slideshow") && has("dialog.cull") && has("edit.undo"), "the library's own commands");
+    assert!(!has("app.shortcuts") && !has("file.export"), "no All Menus: {items:?}");
     // a dialog over it: the native button steps aside
     assert!(h.app.run("app.about", json!({})).is_ok());
     h.step();

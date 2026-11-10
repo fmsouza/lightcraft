@@ -1,6 +1,6 @@
 //! The phone's "…" as the system's own menu (iOS: a UIMenu, as Lightroom and the system apps have
 //! it): the host puts a native button over the "…" icon ([`crate::Services::menu_button`]) and
-//! opens its menu itself, with sections, symbols, check marks and All Menus as submenus. What is
+//! opens its menu itself, with sections, symbols, check marks and submenus. What is
 //! picked comes back through [`pick`] and runs on the next frame. A host without one keeps the
 //! drawn sheet ([`crate::panels::more_sheet`]).
 
@@ -94,8 +94,9 @@ pub(crate) fn sync(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
-/// What "…" holds: the screen's own commands in sections, as a phone photo app has them, then
-/// All Menus (the desktop's menus, for everything else).
+/// What "…" holds: the screen's own commands in sections, as a phone photo app has them (the
+/// library's selection, import, view options and review; the editor's settings, photo and view).
+/// The host's menu and the drawn sheet ([`crate::panels::more_sheet`]) both show this list.
 pub fn more_items(app: &LightcraftApp, editor: bool) -> Vec<NativeItem> {
     let bar = crate::menubar::menu_bar(app);
     // a command as the menus have it now (enabled, checked), or enabled when no menu lists it
@@ -105,55 +106,110 @@ pub fn more_items(app: &LightcraftApp, editor: bool) -> Vec<NativeItem> {
         NativeItem::Action { id: id.into(), params: json!({}), label: crate::i18n::tr(label).into(), symbol, enabled, checked, destructive: false }
     };
     let section = |title: &str, items: Vec<NativeItem>| NativeItem::Section { title: crate::i18n::tr(title).into(), items };
-    let mut items = if editor {
+    // a desktop submenu's items (with their parameters) as a submenu of "…"; none when it is empty
+    let submenu = |menu: &str, name: &str, symbol: &'static str| {
+        let items = sub_nodes(&bar, menu, name).map(nodes_items).unwrap_or_default();
+        (!items.is_empty()).then(|| NativeItem::Submenu { label: crate::i18n::tr(name).into(), symbol, items })
+    };
+    if editor {
         let photo = app.session.active().is_some();
-        let mut delete = action("photo.delete", "Delete Photo", "trash");
-        if let NativeItem::Action { destructive, enabled, .. } = &mut delete {
-            *destructive = true;
+        let mut delete = destructive(action("photo.delete", "Delete Photo", "trash"));
+        if let NativeItem::Action { enabled, .. } = &mut delete {
             *enabled &= photo;
         }
+        use crate::state::BeforeAfter as B;
+        let before_after = [
+            ("view.beforeAfter", "Side by Side", "rectangle.split.2x1", B::SideBySide),
+            ("view.beforeAfterSplit", "Split", "square.split.2x1", B::Split),
+            ("view.beforeAfterTopBottom", "Top/Bottom", "rectangle.split.1x2", B::TopBottom),
+            ("view.beforeAfterSplitTopBottom", "Split Top/Bottom", "square.split.1x2", B::SplitTopBottom),
+        ]
+        .into_iter()
+        .map(|(id, label, symbol, mode)| {
+            let mut a = action(id, label, symbol);
+            // (the menus check only some of them)
+            if let NativeItem::Action { checked, .. } = &mut a {
+                *checked = app.ui.before_after == mode;
+            }
+            a
+        })
+        .collect();
+        let mut photo_items = vec![
+            action("photo.rotateLeft", "Rotate Left", "rotate.left"),
+            action("photo.rotateRight", "Rotate Right", "rotate.right"),
+            action("photo.virtualCopy", "Create Virtual Copy", "plus.square.on.square"),
+        ];
+        photo_items.extend(submenu("Photo", "Add to Album", "rectangle.stack.badge.plus"));
+        photo_items.push(action("library.findSimilar", "Find Similar Photos", "magnifyingglass"));
+        photo_items.push(action("dialog.rename", "Rename…", "pencil"));
         vec![
             section(
                 "Edits",
                 vec![
                     action("develop.copy", "Copy Settings", "doc.on.doc"),
+                    action("dialog.copySettings", "Choose Settings to Copy…", "checklist"),
                     action("develop.paste", "Paste Settings", "doc.on.clipboard"),
+                    action("dialog.pasteSettings", "Paste Selected Settings…", "list.clipboard"),
+                    action("develop.pastePrevious", "Paste from Previous", "clock.arrow.circlepath"),
                     action("develop.reset", "Reset Edits", "arrow.counterclockwise"),
                 ],
             ),
+            section("Photo", photo_items),
             section(
-                "Photo",
+                "View",
                 vec![
-                    action("photo.rotateLeft", "Rotate Left", "rotate.left"),
-                    action("photo.rotateRight", "Rotate Right", "rotate.right"),
-                    action("photo.virtualCopy", "Create Virtual Copy", "plus.square.on.square"),
-                    action("dialog.rename", "Rename…", "pencil"),
+                    action("view.histogram", "Histogram", "chart.bar"),
+                    action("view.infoOverlay", "Info Overlay", "info.circle"),
+                    NativeItem::Submenu { label: crate::i18n::tr("Before/After").into(), symbol: "rectangle.split.2x1", items: before_after },
+                    action("view.focusPoint", "Focus Point", "scope"),
+                    action("view.faceBoxes", "Face Boxes", "face.smiling"),
                 ],
             ),
             section("", vec![delete]),
         ]
     } else {
-        vec![
+        let mut view =
+            vec![action("view.photoGrid", "Photo Grid", "rectangle.grid.2x2"), action("view.squareGrid", "Square Grid", "square.grid.2x2")];
+        view.extend(submenu("View", "Grid Info", "text.below.photo"));
+        view.push(action("view.people", "People", "person.2"));
+        view.push(action("view.slideshow", "Start Slideshow", "play.fill"));
+        let mut items = vec![
             section(
-                "Batch edit",
+                "Select",
                 vec![action("view.selectMode", "Select", "checkmark.circle"), action("library.selectAll", "Select All", "checkmark.circle.fill")],
             ),
             section(
                 "Add photos",
-                vec![action("file.addPhotos", "From Photos", "photo.on.rectangle"), action("file.addFolder", "From Files…", "folder")],
+                vec![action("file.addPhotos", "From Photos", "photo.on.rectangle"), action("file.addFolder", "From Files…", "folder.badge.plus")],
             ),
-            section("View options", vec![action("view.slideshow", "Start Slideshow", "play.fill")]),
-            section("", vec![action("app.settings", "App Settings", "gearshape"), action("app.about", "About LightCraft", "info.circle")]),
-        ]
-    };
-    if !app.native_menu {
-        let menus = bar
-            .iter()
-            .map(|(title, nodes)| NativeItem::Submenu { label: crate::i18n::tr(title).into(), symbol: "", items: nodes_items(nodes) })
-            .collect();
-        items.push(section("", vec![NativeItem::Submenu { label: crate::i18n::tr("All Menus").into(), symbol: "ellipsis.circle", items: menus }]));
+            section("View options", view),
+            section("Review", vec![action("dialog.cull", "Assisted Culling…", "sparkles")]),
+        ];
+        // only where the menus have it: while Recently Deleted is on screen
+        if find(&bar, "library.emptyRecentlyDeleted").is_some() {
+            items.push(section("", vec![destructive(action("library.emptyRecentlyDeleted", "Empty Recently Deleted", "trash"))]));
+        }
+        // (the library has no Undo of its own on a phone)
+        items.push(section("", vec![action("edit.undo", "Undo", "arrow.uturn.backward"), action("edit.redo", "Redo", "arrow.uturn.forward")]));
+        items.push(section("", vec![action("app.settings", "App Settings", "gearshape"), action("app.about", "About LightCraft", "info.circle")]));
+        items
     }
-    items
+}
+
+/// `item` marked as destructive (the system draws it red).
+fn destructive(mut item: NativeItem) -> NativeItem {
+    if let NativeItem::Action { destructive, .. } = &mut item {
+        *destructive = true;
+    }
+    item
+}
+
+/// The children of the submenu `name` in the menu titled `menu`.
+fn sub_nodes<'a>(bar: &'a [(String, Vec<MenuNode>)], menu: &str, name: &str) -> Option<&'a [MenuNode]> {
+    bar.iter().find(|(m, _)| m == menu)?.1.iter().find_map(|n| match n {
+        MenuNode::Submenu { label, children } if label == name => Some(children.as_slice()),
+        _ => None,
+    })
 }
 
 /// A desktop menu's items: runs between separators become sections without a title.

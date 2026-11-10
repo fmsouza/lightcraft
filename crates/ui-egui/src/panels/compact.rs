@@ -220,32 +220,32 @@ fn bar_right(app: &mut LightcraftApp, ui: &mut egui::Ui, editor: bool, add: impl
     add(app, &mut right);
 }
 
-/// What "…" offers in the editor: the photo's settings and the photo itself.
-const EDITOR_MORE: &[(&str, &str)] = &[
-    ("develop.copy", "Copy Settings"),
-    ("develop.paste", "Paste Settings"),
-    ("develop.reset", "Reset Edits"),
-    ("photo.rotateLeft", "Rotate Left"),
-    ("photo.rotateRight", "Rotate Right"),
-    ("photo.virtualCopy", "Create Virtual Copy"),
-    ("dialog.rename", "Rename…"),
-    ("photo.delete", "Delete Photo"),
-];
-
-/// What "…" offers in the library.
-const LIBRARY_MORE: &[(&str, &str)] = &[
-    ("file.addFolder", "Import from Files…"),
-    ("view.selectMode", "Select Photos"),
-    ("library.selectAll", "Select All"),
-    ("app.settings", "Settings…"),
-    ("app.about", "About LightCraft"),
-];
-
-/// "…": the More sheet ([`super::more_sheet`]) with a short list of what this screen needs, as a
-/// phone photo editor has it, then All Menus (the desktop's menus, for everything else).
+/// "…": the More sheet ([`super::more_sheet`]) with what this screen offers
+/// ([`crate::native_menu::more_items`]), as a phone photo editor has it.
 fn more_menu(more: &egui::Response, editor: bool) {
     if more.clicked() {
-        super::more_sheet::open(&more.ctx, if editor { EDITOR_MORE } else { LIBRARY_MORE }, editor);
+        super::more_sheet::open(&more.ctx, editor);
+    }
+}
+
+/// The About dialog's help on a phone: What's New, Send Feedback, Help and System Info as rows a
+/// finger can use (the desktop has them in its Help menu). Nothing in the desktop layout.
+pub fn about_help_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if !is_compact(ui.ctx()) {
+        return;
+    }
+    let mut run = None;
+    for (id, label) in
+        [("app.whatsNew", "What's New"), ("app.feedback", "Send Feedback…"), ("app.help", "LightCraft Help"), ("app.systemInfo", "System Info…")]
+    {
+        if super::more_sheet::row(ui, format!("about:{id}"), crate::i18n::tr(label), true, None, false, false) {
+            run = Some(id);
+        }
+    }
+    if let Some(id) = run
+        && let Err(e) = crate::menubar::run_item(app, id, json!({}))
+    {
+        app.toast(ui.ctx(), e);
     }
 }
 
@@ -535,20 +535,39 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Select mode's bar: how many photos are selected, then Rate, Album, Move to Folder, Delete, and Done
-/// (leaves Select mode). Share is the top bar's, which shares the selection.
+/// A frameless text button of the select bar, as tall as a finger; true when tapped.
+fn bar_text_button(ui: &mut egui::Ui, id: &str, label: &str, color: egui::Color32, enabled: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { color } else { t.text_disabled };
+    let b = ui.add_enabled(
+        enabled,
+        egui::Button::new(egui::RichText::new(crate::i18n::tr(label)).font(t.semibold(14.0)).color(color)).frame(false).min_size(vec2(0.0, 44.0)),
+    );
+    register(ui, format!("button:{id}"), b.rect);
+    b.clicked()
+}
+
+/// Select mode's bar: how many photos are selected and Deselect All, then Rate, Album, Move to
+/// Folder, Delete, and Done (leaves Select mode). In Recently Deleted, Restore and Delete
+/// Permanently take the place of the others. Share is the top bar's, which shares the selection.
 fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let n = app.session.selection.ids.len();
     let any = n > 0;
+    let trash = app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted || crate::menubar::selection_deleted(app);
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let count = if any { crate::i18n::tr_format!("{n} selected", n = n) } else { crate::i18n::tr("Select Photos").to_string() };
         ui.label(egui::RichText::new(count).font(t.semibold(14.0)).color(t.text));
+        ui.add_space(6.0);
+        if any && bar_text_button(ui, "selectNone", "Deselect All", t.accent, true) {
+            let _ = crate::menubar::run_item(app, "library.selectNone", json!({}));
+        }
         let full = ui.max_rect();
+        let left = ui.cursor().left().max(full.left());
         let mut right = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(pos2(full.center().x - 60.0, full.top()), full.max))
+                .max_rect(Rect::from_min_max(pos2(left, full.top()), full.max))
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
         right.spacing_mut().item_spacing.x = 2.0;
@@ -556,6 +575,16 @@ fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         register(&right, "button:selectDone", done.rect);
         if done.clicked() {
             let _ = app.run("view.selectMode", json!({"on": false}));
+        }
+        if trash {
+            // the photos are deleted already: put them back, or remove them for good
+            if trash_button(&mut right, any) {
+                let _ = crate::menubar::run_item(app, "photo.deletePermanently", json!({}));
+            }
+            if bar_text_button(&mut right, "selectRestore", "Restore", t.accent, any) {
+                let _ = crate::menubar::run_item(app, "photo.restore", json!({}));
+            }
+            return;
         }
         if icon_button(&mut right, "selectDelete", Icon::Trash, BUTTON, false, any, "Delete").clicked() {
             let _ = crate::menubar::run_item(app, "photo.delete", json!({}));
@@ -573,6 +602,22 @@ fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
         }
     });
+}
+
+/// Delete Permanently: the trash in red (it can be undone, but not from Recently Deleted).
+fn trash_button(ui: &mut egui::Ui, enabled: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(BUTTON.x, 44.0), if enabled { Sense::click() } else { Sense::hover() });
+    register(ui, "icon:selectDeletePermanently", r);
+    let label = crate::i18n::tr("Delete Permanently");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    if enabled && resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(r.shrink(2.0), 8.0, t.hover);
+    }
+    paint(ui.painter(), Rect::from_center_size(r.center(), vec2(20.0, 20.0)), Icon::Trash, if enabled { t.reject } else { t.text_disabled });
+    let clicked = enabled && resp.clicked();
+    resp.on_hover_text(label);
+    clicked
 }
 
 fn close_sheet(app: &mut LightcraftApp) {
