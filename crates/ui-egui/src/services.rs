@@ -146,6 +146,9 @@ pub struct Services {
     /// pick or programs to open with, the system's colour management and GPU. Settings that only
     /// make sense on a computer are left out there.
     pub mobile: bool,
+    /// The phone's "…" as the system's menu ([`crate::native_menu`]): called at the end of each
+    /// frame with where "…" is and what its menu holds, or `None` to take the native button away.
+    pub menu_button: Option<Box<dyn FnMut(crate::native_menu::MenuRequest)>>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
 }

@@ -122,6 +122,10 @@ fn phone_width_dialogs_fit_the_screen() {
     for command in ["app.settings", "dialog.export", "app.shortcuts", "dialog.mergeHdr", "dialog.labelNames", "dialog.copySettings"] {
         open(&mut h, command);
         assert!(h.app.ui.dialog.is_some(), "{command} opened a dialog");
+        // (Settings is a sheet that slides up: measured once it is in place)
+        for _ in 0..if command == "app.settings" { 60 } else { 0 } {
+            h.step();
+        }
         let r = dialog_rect(&h).unwrap_or_else(|| panic!("{command}: no dialog window"));
         assert!(r.left() >= 0.0 && r.right() <= PHONE[0], "{command} fits across: {r:?}");
         assert!(r.top() >= 0.0 && r.bottom() <= PHONE[1], "{command} fits down: {r:?}");
@@ -1558,4 +1562,71 @@ fn desktop_settings_keep_every_section() {
     h.step();
     assert!(widget(&h, "check:settings.gpu").is_some());
     assert!(widget(&h, "slider:settingsCache").is_none());
+}
+
+/// A phone app whose host shows "…" as its own menu: what the host was asked for, each frame.
+fn native_menu_phone() -> (Headless, std::sync::Arc<std::sync::Mutex<Vec<crate::native_menu::MenuRequest>>>) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let services = Services {
+        png: None,
+        mobile: true,
+        menu_button: Some(Box::new(move |r| log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(r))),
+        ..Default::default()
+    };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, PHONE, 1.0);
+    let r = h.request("ui.set", json!({"view": "photoGrid", "right": "none"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    (h, seen)
+}
+
+#[test]
+fn phone_more_is_the_hosts_menu_over_the_dots() {
+    let (mut h, seen) = native_menu_phone();
+    h.step();
+    let last = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().cloned().flatten();
+    let (rect, items) = last.expect("the host is asked to show its menu");
+    assert_eq!(Some(rect), widget(&h, "icon:more"), "over the drawn …");
+    // the library's sections, with All Menus last
+    let has = |id: &str| {
+        fn walk(items: &[crate::native_menu::NativeItem], id: &str) -> bool {
+            use crate::native_menu::NativeItem as N;
+            items.iter().any(|i| match i {
+                N::Action { id: i, .. } => i == id,
+                N::Section { items, .. } | N::Submenu { items, .. } => walk(items, id),
+            })
+        }
+        walk(&items, id)
+    };
+    assert!(has("app.settings") && has("view.selectMode") && has("file.addPhotos"));
+    assert!(has("app.shortcuts") || has("file.export") || has("view.slideshow"), "All Menus holds the desktop's menus");
+    // a dialog over it: the native button steps aside
+    assert!(h.app.run("app.about", json!({})).is_ok());
+    h.step();
+    let last = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().cloned();
+    assert!(matches!(last, Some(None)), "hidden under a dialog");
+    h.app.ui.dialog = None;
+    // a pick runs on the next frame
+    crate::native_menu::pick("app.settings", json!({}));
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { .. })), "{:?}", h.app.ui.dialog.is_some());
+}
+
+#[test]
+fn phone_settings_is_a_sheet_from_the_bottom_edge() {
+    let mut h = mobile_settings("general");
+    // (past its slide up: headless time moves a frame at a time)
+    for _ in 0..60 {
+        h.step();
+    }
+    let w = widget(&h, "dialog:window").expect("the Settings window");
+    assert!((w.width() - PHONE[0]).abs() < 1.0, "the width of the screen: {w:?}");
+    assert!((w.bottom() - PHONE[1]).abs() < 1.0, "down to the bottom edge: {w:?}");
+    assert!(w.top() < 40.0, "up to the status bar: {w:?}");
+    assert!(widget(&h, "button:settingsClose").is_some(), "its own ✕");
+    assert!(widget(&h, "button:dialogOk").is_none(), "no Close button at the bottom");
+    click(&mut h, "button:settingsClose");
+    assert!(h.app.ui.dialog.is_none(), "✕ closes it");
 }

@@ -24,6 +24,8 @@ mod ios_fonts;
 #[cfg(target_os = "ios")]
 mod ios_keys;
 #[cfg(target_os = "ios")]
+mod ios_menu;
+#[cfg(target_os = "ios")]
 mod ios_orientation;
 #[cfg(target_os = "ios")]
 mod ios_pencil;
@@ -456,6 +458,12 @@ fn services(export_dir: String, ctx: &egui::Context) -> Services {
         // copies it; Android's picker copies a folder into the library already
         import_copies: cfg!(target_os = "ios"),
         mobile: true,
+        // "…" opens the system's menu
+        #[cfg(target_os = "ios")]
+        menu_button: Some(Box::new({
+            let ctx = ctx.clone();
+            move |request| ios_menu::update(request, &ctx)
+        })),
         #[cfg(target_os = "ios")]
         open_url: Some(Box::new(|url: &str| https(url).and_then(ios_files::open_url))),
         #[cfg(target_os = "android")]

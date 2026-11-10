@@ -691,9 +691,11 @@ impl LightcraftApp {
             return;
         }
         self.sync_theme(&ctx);
+        crate::native_menu::run_picks(self, &ctx);
         self.ui_pass(&ctx);
         self.draw_window(ui);
         self.finish_ui_pass(&ctx);
+        crate::native_menu::sync(self, &ctx);
     }
 }
 

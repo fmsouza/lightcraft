@@ -115,6 +115,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         confirm = true;
     }
     let title = dialog_title(app, &dlg);
+    // (upright on a phone, Settings is a sheet up from the bottom edge with a header of its own)
+    let phone_settings = matches!(dlg, Dialog::Settings { .. }) && crate::panels::settings::portrait_phone(ctx);
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
     // The import review takes most of the screen (its photo grid and options column scroll on
     // their own) and can be resized on the desktop; it keeps a window id of its own so the size
@@ -132,9 +134,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // row stays where it is (centred like the others, the row jumped with each tab's height)
     let settings = matches!(dlg, Dialog::Settings { .. });
     let top = (screen.height() * 0.08).clamp(DIALOG_SCREEN_MARGIN, 96.0);
-    let body_max =
-        if settings { screen.height() - top - DIALOG_SCREEN_MARGIN - chrome } else { screen.height() - 2.0 * DIALOG_SCREEN_MARGIN - chrome }
-            .max(DIALOG_MIN_BODY);
+    let room = if phone_settings {
+        crate::panels::compact::sheet_rect(ctx).height()
+    } else {
+        screen.height() - DIALOG_SCREEN_MARGIN - if settings { top } else { DIALOG_SCREEN_MARGIN }
+    };
+    let body_max = (room - chrome).max(DIALOG_MIN_BODY);
     let widest_id = window_id.with("widest");
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
     let mut content_w = 0.0f32;
@@ -158,18 +163,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
         });
-    // (upright on a phone, Settings draws a header of its own with ✕)
-    let phone_settings = settings && crate::panels::settings::portrait_phone(ctx);
-    let window = window.title_bar(!phone_settings);
-    let window = if import {
-        // inside the frame's margins and title bar
-        let area = ctx.content_rect().shrink(8.0);
-        let size = crate::import::window_size(area.size()) - egui::vec2(32.0, 64.0);
-        let window = window.vscroll(false).constrain_to(area).max_size(area.size() - egui::vec2(32.0, 64.0));
-        if crate::panels::compact::is_compact(ctx) { window.fixed_size(size) } else { window.default_size(size) }
-    } else {
-        crate::panels::compact::dialog(ctx, window)
-    };
+    let window = if phone_settings { settings_sheet(ctx, &title, window_id) } else { place_window(ctx, window, import) };
     let mut import_pressed = None;
     // (dropdowns made in a finger-sized dialog list finger-sized rows)
     // (the import review only upright, where its photos have the height: on a short screen held
@@ -185,6 +179,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             ui.disable();
         }
         ui.spacing_mut().item_spacing.y = 8.0;
+        // (a sheet keeps its height whatever the page holds)
+        if phone_settings {
+            ui.set_min_height(ui.available_height());
+        }
         // (Print lays itself out for the phone)
         if finger {
             crate::panels::compact::finger_style(ui);
@@ -275,6 +273,30 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
 /// The band of the top bar that doubles as the window's title bar, as drawn last frame: `None`
 /// without the integrated title bar (Windows, Linux, the web), in macOS full screen, and while the
 /// bar isn't on screen (the full-screen photo view).
+/// Upright on a phone, Settings is a sheet the width of the screen that slides up from the bottom
+/// edge and stays, with a header of its own (‹, the page's name, ✕) in place of a title bar.
+fn settings_sheet<'a>(ctx: &egui::Context, title: &str, id: egui::Id) -> egui::Window<'a> {
+    let window = egui::Window::new(crate::i18n::tr(title))
+        .id(id)
+        .collapsible(false)
+        .resizable(false)
+        .title_bar(false)
+        .frame(crate::panels::compact::sheet_frame(ctx));
+    crate::panels::compact::sheet_window(ctx, window, id)
+}
+
+/// The import review's size and place, or any other dialog's in the compact layout.
+fn place_window<'a>(ctx: &egui::Context, window: egui::Window<'a>, import: bool) -> egui::Window<'a> {
+    if !import {
+        return crate::panels::compact::dialog(ctx, window);
+    }
+    // inside the frame's margins and title bar
+    let area = ctx.content_rect().shrink(8.0);
+    let size = crate::import::window_size(area.size()) - egui::vec2(32.0, 64.0);
+    let window = window.vscroll(false).constrain_to(area).max_size(area.size() - egui::vec2(32.0, 64.0));
+    if crate::panels::compact::is_compact(ctx) { window.fixed_size(size) } else { window.default_size(size) }
+}
+
 fn title_bar_band(app: &LightcraftApp) -> Option<egui::Rect> {
     // (the full-screen photo view draws no top bar, so the frame it is entered on still holds last frame's region)
     if !app.integrated_titlebar || app.window_is_fullscreen || app.ui.fullscreen {

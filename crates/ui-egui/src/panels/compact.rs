@@ -212,6 +212,10 @@ fn bar_right(app: &mut LightcraftApp, ui: &mut egui::Ui, editor: bool, add: impl
     let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
     right.spacing_mut().item_spacing.x = 0.0;
     let more = icon_button(&mut right, "more", Icon::Dots, BUTTON, false, true, "More");
+    if app.services.menu_button.is_some() {
+        // the host's own menu: its button over this one takes the tap (see `native_menu`)
+        crate::native_menu::place(ui.ctx(), more.rect, editor);
+    }
     more_menu(&more, editor);
     add(app, &mut right);
 }
@@ -894,6 +898,52 @@ pub fn dialog<'a>(ctx: &egui::Context, win: egui::Window<'a>) -> egui::Window<'a
     let w = area.width().min(DIALOG_MAX_W);
     // auto-sized: as tall as its contents up to the screen, then it scrolls
     win.auto_sized().min_width(w).max_width(w).max_height(area.height()).vscroll(true).constrain_to(area)
+}
+
+/// Where a full sheet goes: the width of the screen, from just under the status bar to the
+/// bottom edge (under the home indicator too; [`sheet_frame`] keeps its content above it).
+pub fn sheet_rect(ctx: &egui::Context) -> Rect {
+    let screen = ctx.viewport_rect();
+    let safe = ctx.content_rect();
+    Rect::from_min_max(egui::pos2(screen.left(), safe.top() + 8.0), screen.max)
+}
+
+/// A full sheet's frame: rounded at the top, square where it meets the bottom edge, its content
+/// clear of the home indicator.
+pub fn sheet_frame(ctx: &egui::Context) -> egui::Frame {
+    let inset = (ctx.viewport_rect().bottom() - ctx.content_rect().bottom()).max(0.0);
+    egui::Frame::window(&ctx.global_style()).corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 }).inner_margin(egui::Margin {
+        left: 16,
+        right: 16,
+        top: 6,
+        bottom: (12.0 + inset).round() as i8,
+    })
+}
+
+/// How long a sheet takes to slide up (seconds).
+const SHEET_SLIDE: f64 = 0.28;
+
+/// `win` as a full sheet ([`sheet_rect`]) that slides up from the bottom edge when it is first
+/// shown, then stays: its pages change inside it. `id`: the window's, to time the slide by.
+pub fn sheet_window<'a>(ctx: &egui::Context, win: egui::Window<'a>, id: egui::Id) -> egui::Window<'a> {
+    let full = sheet_rect(ctx);
+    let key = id.with("sheet-shown");
+    let pass = ctx.cumulative_pass_nr();
+    let now = ctx.input(|i| i.time);
+    // (shown again after a pass without it: the slide starts over)
+    let start = match ctx.data(|d| d.get_temp::<(f64, u64)>(key)) {
+        Some((start, last)) if last + 1 >= pass => start,
+        _ => now,
+    };
+    ctx.data_mut(|d| d.insert_temp(key, (start, pass)));
+    let t = ((now - start) / SHEET_SLIDE).clamp(0.0, 1.0) as f32;
+    if t < 1.0 {
+        ctx.request_repaint();
+    }
+    // ease out: fast at first, settling into place
+    let shown = 1.0 - (1.0 - t).powi(3);
+    let rect = full.translate(egui::vec2(0.0, (1.0 - shown) * full.height()));
+    win.fixed_rect(rect).constrain(false).vscroll(false)
 }
 
 /// Finger-sized controls for a dialog in the compact layout: 44 pt buttons and fields, 16 pt

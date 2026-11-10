@@ -193,7 +193,12 @@ fn phone_sections(ui: &mut egui::Ui, tab: &mut String, tabs: &[(&'static str, &'
 /// On Slideshow the slide preview is pinned between the tab bar and the page (where the room
 /// allows), and comes off that page's room.
 pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_height: f32) {
-    ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, PAGE_SIZE.x));
+    // (a phone's sheet is the width of the screen)
+    if portrait_phone(ui.ctx()) {
+        ui.set_width(ui.available_width());
+    } else {
+        ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, PAGE_SIZE.x));
+    }
     let top = ui.cursor().top();
     // The page drawn is the one that was open when the frame began: a tab clicked now opens on
     // the next frame, so a text box on the page being left is drawn once more and saves what was
