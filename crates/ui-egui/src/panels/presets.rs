@@ -84,24 +84,49 @@ impl AppliedByPhoto {
 
 /// The Presets panel: the Favorites section of starred presets on top (issue #1999), then the
 /// groups of built-in and user presets, each row applying its preset on click.
+/// The list's sizes: a desktop panel's, or a phone sheet's (finger-sized rows, the looks shown as
+/// thumbnails, larger text; the sheet names the panel, so no title of its own).
+struct Look {
+    title: bool,
+    icon: f32,
+    group_h: f32,
+    group_font: f32,
+    /// A preset row's height, without and with thumbnails.
+    row_h: (f32, f32),
+    font: f32,
+    /// Thumbnails whatever the "Show Thumbnails" choice (a phone photo editor's preset list).
+    thumbs: bool,
+}
+
+fn look(ctx: &egui::Context) -> Look {
+    if super::compact::is_compact(ctx) {
+        Look { title: false, icon: 40.0, group_h: 44.0, group_font: 15.0, row_h: (48.0, 64.0), font: 16.0, thumbs: true }
+    } else {
+        Look { title: true, icon: 28.0, group_h: 32.0, group_font: 13.0, row_h: (26.0, 54.0), font: 13.0, thumbs: false }
+    }
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let lk = look(ui.ctx());
     egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
-        ui.painter().text(pos2(hr.left() + 24.0, hr.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr("Presets"), t.semibold(15.0), t.text);
+        if lk.title {
+            ui.painter().text(pos2(hr.left() + 24.0, hr.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr("Presets"), t.semibold(15.0), t.text);
+        }
         let mut hdr = ui.new_child(
             egui::UiBuilder::new()
                 // the "+" glyph as far from the right edge as the title from the left (its 28 pt
                 // button draws it about 9 pt inside)
-                .max_rect(Rect::from_min_max(pos2(hr.right() - 96.0, hr.top()), pos2(hr.right() - 16.0, hr.bottom())))
+                .max_rect(Rect::from_min_max(pos2(hr.right() - 16.0 - 2.0 * lk.icon - 24.0, hr.top()), pos2(hr.right() - 16.0, hr.bottom())))
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
         if icon_button(
             &mut hdr,
             "presetCreate",
             Icon::Plus,
-            vec2(28.0, 28.0),
+            vec2(lk.icon, lk.icon),
             false,
             app.session.active().is_some(),
             crate::i18n::tr("Create Preset…"),
@@ -110,7 +135,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         {
             app.ui.dialog = Some(crate::state::Dialog::create_preset());
         }
-        let more = icon_button(&mut hdr, "presetMore", Icon::More, vec2(28.0, 28.0), false, true, crate::i18n::tr("More preset options"));
+        let more = icon_button(&mut hdr, "presetMore", Icon::More, vec2(lk.icon, lk.icon), false, true, crate::i18n::tr("More preset options"));
         egui::Popup::menu(&more).show(|ui| {
             let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
             register(ui, "presetMenu:thumbnails", r.rect);
@@ -161,8 +186,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let active = app.session.active();
         let marked = AppliedByPhoto::of(ui.ctx(), &app.session, active);
         let current = active.and_then(|id| app.session.develop_of(id)).map(|d| (*d).clone());
-        let thumbs = app.ui.preset_thumbs && active.is_some();
-        let row_h = if thumbs { 54.0 } else { 26.0 };
+        let thumbs = (app.ui.preset_thumbs || lk.thumbs) && active.is_some();
+        let row_h = if thumbs { lk.row_h.1 } else { lk.row_h.0 };
         let groups = grouped(ui.ctx(), &app.session.presets);
         let scroll = egui::ScrollArea::vertical().id_salt("presets-scroll").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -174,7 +199,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 // the Favorites section opens and closes apart from a user group named "Favorites"
                 let open_id = egui::Id::unique(("preset-group", favorites, &g));
                 let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), lk.group_h), Sense::click());
                 crate::widgets::announce(&resp, g.to_string());
                 // outside the `presetGroup:` ids, which a user group of any name can take
                 register(ui, if favorites { "presetFavorites".to_string() } else { format!("presetGroup:{g}") }, r);
@@ -188,7 +213,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     pos2(r.left() + 36.0, r.center().y),
                     Align2::LEFT_CENTER,
                     crate::i18n::builtin_label(&g, builtin),
-                    t.semibold(13.0),
+                    t.semibold(lk.group_font),
                     t.text_label,
                 );
                 if resp.clicked() {
@@ -225,7 +250,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let look = if thumbs || resp.hovered() { current.as_ref().map(|d| pr.apply(d, 1.0)) } else { None };
                     let mut text_x = r.left() + 40.0;
                     if thumbs && let (Some(id), Some(s)) = (active, look.as_ref()) {
-                        let tr = Rect::from_min_size(pos2(r.left() + 36.0, r.top() + 5.0), vec2(66.0, row_h - 10.0));
+                        // (the desktop's 66 × 44, kept in shape at a phone's row height)
+                        let tr = Rect::from_min_size(pos2(r.left() + 36.0, r.top() + 5.0), vec2((row_h - 10.0) * 1.5, row_h - 10.0));
                         ui.painter().rect_filled(tr, 2.0, t.canvas);
                         if let Some(job) = app.session.variant_job(id, s, THUMB_EDGE)
                             && let Some(tex) = app.renderer.variant(job)
@@ -234,7 +260,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         }
                         text_x = tr.right() + 10.0;
                     }
-                    ui.painter().text(pos2(text_x, r.center().y), Align2::LEFT_CENTER, &name, t.font(13.0), t.text_label);
+                    ui.painter().text(pos2(text_x, r.center().y), Align2::LEFT_CENTER, &name, t.font(lk.font), t.text_label);
                     if fav {
                         crate::rating::paint_star(
                             ui.painter(),

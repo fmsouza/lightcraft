@@ -1402,3 +1402,22 @@ fn phone_keyword_list_fits_the_sheet_with_finger_sized_rows() {
     let row = d.app.widgets.iter().find(|(w, _)| w.starts_with("keywordRow:")).map(|(_, r)| *r).expect("a keyword row");
     assert!(row.height() < 30.0, "{row:?}");
 }
+
+#[test]
+fn phone_presets_list_shows_looks_in_finger_sized_rows() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "none"}));
+    assert!(!h.app.ui.preset_thumbs, "the desktop's thumbnails choice is off");
+    click(&mut h, "icon:presets");
+    let row = h.app.widgets.iter().find(|(w, _)| w.starts_with("preset:")).map(|(_, r)| *r).expect("a preset row");
+    assert!(row.height() >= 60.0, "a thumbnail row a finger can take: {row:?}");
+    let group = h.app.widgets.iter().find(|(w, _)| w.starts_with("presetGroup:")).map(|(_, r)| *r).expect("a group heading");
+    assert!(group.height() >= 44.0, "{group:?}");
+    for id in ["icon:presetCreate", "icon:presetMore"] {
+        assert!(widget(&h, id).unwrap_or_else(|| panic!("{id}")).height() >= 40.0, "{id}");
+    }
+    // the desktop keeps its dense list
+    let d = demo([1400.0, 900.0], json!({"view": "detail", "presets": true}));
+    if let Some(row) = d.app.widgets.iter().find(|(w, _)| w.starts_with("preset:")).map(|(_, r)| *r) {
+        assert!(row.height() < 30.0, "{row:?}");
+    }
+}
