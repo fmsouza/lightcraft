@@ -5,19 +5,30 @@ use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mobile = super::mobile(app);
-    row(ui, t, crate::i18n::tr("Language"), |ui| {
-        let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
-        if mobile {
-            // a phone: one dropdown, not twenty buttons
-            language_dropdown(ui, &languages, &mut app.ui.language);
-        } else {
-            // Thirteen language names do not fit one line in a narrow window: wrap them.
-            ui.horizontal_wrapped(|ui| {
-                choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
-            });
+    let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
+    if super::widgets::phone_list(ui) {
+        // upright on a phone: Language and the one chosen, which opens the list
+        heading(ui, t, crate::i18n::tr("Language"));
+        let shown = languages.iter().find(|(l, _)| *l == app.ui.language).map_or("", |(_, n)| *n);
+        let mut pick = app.ui.language;
+        let list = |ui: &mut egui::Ui| super::widgets::tick_list(ui, "settingsLanguageList", &languages, &mut pick, |_| None).then_some(());
+        if super::widgets::disclosure(ui, "settingsLanguage", "Language", shown, list).is_some() {
+            app.ui.language = pick;
         }
-        crate::i18n::set_language(app.ui.language);
-    });
+    } else {
+        row(ui, t, crate::i18n::tr("Language"), |ui| {
+            if mobile {
+                // a phone held sideways, a tablet: one dropdown, not twenty buttons
+                language_dropdown(ui, &languages, &mut app.ui.language);
+            } else {
+                // Thirteen language names do not fit one line in a narrow window: wrap them.
+                ui.horizontal_wrapped(|ui| {
+                    choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
+                });
+            }
+        });
+    }
+    crate::i18n::set_language(app.ui.language);
     // a phone or tablet app keeps one library in its own storage, imports no Lightroom catalogs
     // and opens on its photos: none of these choices apply there
     if !mobile {
@@ -186,6 +197,16 @@ pub(super) fn preset_combo(
             .unwrap_or_else(|| crate::i18n::tr_format!("{pid} (missing)", pid = pid))
     };
     let text = current.map(name).unwrap_or_else(|| crate::i18n::tr(none_label).to_string());
+    if super::widgets::phone_list(ui) {
+        // upright on a phone: the row opens the presets under it
+        let picked = super::widgets::disclosure(ui, id, label, &text, |ui| {
+            if super::widgets::tick_row(ui, &format!("{id}-none"), crate::i18n::tr(none_label), current.is_none()) {
+                return Some(None);
+            }
+            crate::panels::presets::picker_rows(ui, id, &app.session.presets, current).map(Some)
+        });
+        return picked.filter(|v| v.as_deref() != current);
+    }
     let mut out = None;
     let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).show_ui(ui, |ui| {
         if ui.selectable_label(current.is_none(), crate::i18n::tr(none_label)).clicked() {

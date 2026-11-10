@@ -38,7 +38,8 @@ pub(super) fn mobile(app: &LightcraftApp) -> bool {
 /// The tabs this host shows: a phone or tablet app has no Display tab (its monitor profile is the
 /// system's colour management).
 fn tabs(app: &LightcraftApp) -> Vec<(&'static str, &'static str)> {
-    TABS.iter().copied().filter(|(id, _)| !(mobile(app) && *id == "display")).collect()
+    // (a phone or tablet manages its display's colour itself, and has no AI Denoise)
+    TABS.iter().copied().filter(|(id, _)| !(mobile(app) && matches!(*id, "display" | "denoise"))).collect()
 }
 
 pub use display::display_profile;
@@ -81,7 +82,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
         // (a phone or tablet app has no Display tab: a link to it shows General)
-        "display" if mobile(app) => general_tab(app, ui, &t),
+        "display" | "denoise" if mobile(app) => general_tab(app, ui, &t),
         "display" => display_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
         "slideshow" => slideshow_tab(app, ui, &t, true),

@@ -1648,3 +1648,34 @@ fn phone_interface_is_a_phones_display_settings() {
     let row = widget(&h, "button:settingsGridBadges-0").expect("Ratings & flags as a list");
     assert!(row.height() >= 44.0 && row.width() > page.width() - 40.0, "{row:?} in {page:?}");
 }
+
+#[test]
+fn phone_language_opens_its_list_in_place() {
+    let mut h = mobile_settings("general");
+    click(&mut h, "button:settingsTab-general");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("button:settingsLanguageList-")), "closed at first");
+    click(&mut h, "combo:settingsLanguage");
+    let languages = crate::i18n::Locale::for_picker();
+    let fr = languages.iter().position(|l| *l == crate::i18n::Locale::Fr).expect("French is offered");
+    let row = widget(&h, &format!("button:settingsLanguageList-{fr}")).expect("the list opened under it");
+    assert!(row.height() >= 44.0, "{row:?}");
+    click(&mut h, &format!("button:settingsLanguageList-{fr}"));
+    assert_eq!(h.app.ui.language, crate::i18n::Locale::Fr);
+    assert!(widget(&h, &format!("button:settingsLanguageList-{fr}")).is_none(), "a pick closes it");
+    h.app.ui.language = crate::i18n::Locale::En;
+    crate::i18n::set_language(crate::i18n::Locale::En);
+}
+
+#[test]
+fn phone_settings_leave_out_ai_denoise_and_large_face_models() {
+    let h = mobile_settings("general");
+    assert!(widget(&h, "button:settingsTab-faces").is_some(), "Faces stays");
+    assert!(widget(&h, "button:settingsTab-denoise").is_none(), "no AI Denoise");
+    let h = mobile_settings("faces");
+    let ids: Vec<&str> = h.app.widgets.iter().map(|(w, _)| w.as_str()).collect();
+    assert!(!ids.iter().any(|w| w.ends_with(":auraface-v1")), "no AuraFace: {ids:?}");
+    assert!(!ids.contains(&"faces:addModel") && !ids.iter().any(|w| w.starts_with("faces:device:")), "no model files or processors");
+    // a link to AI Denoise shows General
+    let h = mobile_settings("denoise");
+    assert!(widget(&h, "combo:settingsLanguage").is_some(), "General instead");
+}

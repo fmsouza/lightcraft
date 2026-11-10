@@ -95,6 +95,12 @@ pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnc
     .inner
 }
 
+/// [`row`], but upright on a phone the control is drawn alone: it names itself there (a
+/// [`disclosure`] row carries its label).
+pub(crate) fn named_row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if phone_list(ui) { add(ui) } else { row(ui, t, label, add) }
+}
+
 pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     let size = if crate::widgets::finger_ui(ui) { 14.0 } else { 11.0 };
     ui.label(RichText::new(crate::i18n::tr(text)).size(size).color(t.text_dim));
@@ -211,6 +217,64 @@ pub(crate) fn tick_list<V: PartialEq + Copy>(
         }
     });
     changed
+}
+
+/// One row of a phone's list (`button:{id}`), ticked when `on`; true when tapped.
+pub(crate) fn tick_row(ui: &mut egui::Ui, id: &str, label: &str, on: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 44.0), egui::Sense::click());
+    register(ui, format!("button:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, label));
+    let p = ui.painter();
+    if resp.is_pointer_button_down_on() {
+        p.rect_filled(r, 6.0, t.hover);
+    }
+    p.text(egui::pos2(r.left() + 4.0, r.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), t.text);
+    if on {
+        let tick = egui::Rect::from_center_size(egui::pos2(r.right() - 14.0, r.center().y), egui::vec2(18.0, 18.0));
+        crate::icons::paint(p, tick, crate::icons::Icon::Check, t.accent);
+    }
+    resp.clicked()
+}
+
+/// A phone's setting with a list of values: a row with its name and the value chosen (`combo:{id}`)
+/// that opens the list under it; `list` draws the choices and returns what was picked, which
+/// closes it again. `None` until something is picked.
+pub(crate) fn disclosure<R>(ui: &mut egui::Ui, id: &str, label: &str, value: &str, list: impl FnOnce(&mut egui::Ui) -> Option<R>) -> Option<R> {
+    let t = Tokens::get(ui.ctx());
+    let key = egui::Id::unique(("settings-disclosure", id));
+    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 44.0), egui::Sense::click());
+    register(ui, format!("combo:{id}"), r);
+    let label = crate::i18n::tr(label);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, format!("{label}: {value}")));
+    if resp.clicked() {
+        open = !open;
+    }
+    let p = ui.painter();
+    if resp.is_pointer_button_down_on() {
+        p.rect_filled(r, 6.0, t.hover);
+    }
+    p.text(egui::pos2(r.left() + 4.0, r.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), t.text);
+    let chevron = egui::Rect::from_center_size(egui::pos2(r.right() - 10.0, r.center().y), egui::vec2(14.0, 14.0));
+    crate::icons::paint(p, chevron, if open { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown }, t.text_dim);
+    // the value, cut short from its end where the name leaves too little room
+    let name_w = p.layout_no_wrap(label.to_string(), t.font(16.0), t.text).size().x;
+    let room = (w - name_w - 48.0).max(40.0);
+    let shown = crate::widgets::one_line(p, value, t.font(16.0), t.text_dim, room);
+    let at = egui::pos2(chevron.left() - 8.0 - shown.size().x, r.center().y - shown.size().y / 2.0);
+    p.galley(at, shown, t.text_dim);
+    let mut out = None;
+    if open {
+        out = ui.indent(("disclosure", id), list).inner;
+        if out.is_some() {
+            open = false;
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(key, open));
+    out
 }
 
 #[cfg(test)]

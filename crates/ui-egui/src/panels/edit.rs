@@ -353,18 +353,26 @@ fn effects_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettin
     ui.add_space(8.0);
 }
 
-fn detail_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
-    for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
-        control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
-    }
-    // AI Denoise is its own tool, apart from the manual noise reduction sliders below it
+/// AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that
+/// picture is doing.
+fn ai_denoise(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
     sub_title(ui, crate::i18n::tr("AI Denoise"));
-    // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
     let applicable = !matches!(app.session.denoise_photo_state(id), lightcraft_engine::denoise::PhotoState::NotApplicable);
     let on = d.enhance.denoise_enabled();
     super::denoise::detail_toggle(app, ui, id, on, applicable);
     control(app, ui, d, "enhance.denoise", applicable && on);
     super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
+}
+
+fn detail_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
+    for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
+        control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
+    }
+    // AI Denoise is its own tool, apart from the manual noise reduction sliders below it (not on a
+    // phone or tablet: no model is offered there, and a raw would take minutes on its processor)
+    if !app.services.mobile {
+        ai_denoise(app, ui, d, id);
+    }
     sub_title(ui, crate::i18n::tr("Noise Reduction"));
     for c in ["detail.nrLuminance", "detail.nrDetail", "detail.nrContrast", "detail.nrColor", "detail.nrColorDetail", "detail.nrColorSmoothness"] {
         control(app, ui, d, c, true);

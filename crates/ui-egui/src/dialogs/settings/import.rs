@@ -1,13 +1,13 @@
 use super::general::{cameras, preset_combo};
-use super::widgets::{button_width, check, choices, field, heading, hint, path_label, row};
+use super::widgets::{button_width, check, choices, field, heading, hint, named_row, path_label, row};
 use super::{LightcraftApp, RichText, Tokens, json, register};
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
     heading(ui, t, crate::i18n::tr("Raw defaults"));
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the library."));
-    row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
-        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", crate::i18n::tr("Raw default"), d.raw_preset.as_deref(), "LightCraft Default") {
+    named_row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
+        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", crate::i18n::tr("Raw photos"), d.raw_preset.as_deref(), "LightCraft Default") {
             let _ = app.run("library.preferences", json!({"import": {"rawPreset": v}}));
         }
     });
@@ -86,8 +86,8 @@ fn per_camera(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightc
 /// The non-raw default, and the metadata added on import.
 fn other_and_metadata(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightcraft_engine::import::ImportDefaults) {
     heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
-    row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
-        if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Other preset"), d.other_preset.as_deref(), "None") {
+    named_row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
+        if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Non-raw photos"), d.other_preset.as_deref(), "None") {
             let _ = app.run("library.preferences", json!({"import": {"otherPreset": v}}));
         }
     });
@@ -102,7 +102,14 @@ fn other_and_metadata(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d:
             // (the project's text field: Esc gives the text back and stays in Settings, and with
             // the text back the line below has nothing to save)
             let widget = format!("field:settings.{key}");
-            let shown = field(ui, crate::text_field::TextField::singleline(&widget, &mut text).hint(hint_text).width(240.0));
+            let shown = field(
+                ui,
+                crate::text_field::TextField::singleline(&widget, &mut text).hint(hint_text).width(if super::widgets::phone_list(ui) {
+                    ui.available_width()
+                } else {
+                    240.0
+                }),
+            );
             if shown.committed() && text.trim() != value {
                 let _ = app.run("library.preferences", json!({"import": {key: text.trim()}}));
             }
@@ -113,7 +120,22 @@ fn other_and_metadata(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d:
             }
         });
     }
-    if !app.session.metadata_presets.is_empty() {
+    if !app.session.metadata_presets.is_empty() && super::widgets::phone_list(ui) {
+        let cur = d.metadata_preset.clone();
+        let shown = cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into());
+        let names: Vec<String> = app.session.metadata_presets.iter().map(|m| m.name.clone()).collect();
+        let pick = super::widgets::disclosure(ui, "settingsMetaPreset", "Metadata preset", &shown, |ui| {
+            if super::widgets::tick_row(ui, "settingsMetaPreset-none", crate::i18n::tr("None"), cur.is_none()) {
+                return Some(String::new());
+            }
+            names.iter().enumerate().find_map(|(i, n)| {
+                super::widgets::tick_row(ui, &format!("settingsMetaPreset-{i}"), n, cur.as_deref() == Some(n.as_str())).then(|| n.clone())
+            })
+        });
+        if let Some(n) = pick {
+            let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
+        }
+    } else if !app.session.metadata_presets.is_empty() {
         row(ui, t, crate::i18n::tr("Metadata preset"), |ui| {
             let cur = d.metadata_preset.clone();
             let mut pick = None;

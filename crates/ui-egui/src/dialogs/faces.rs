@@ -276,17 +276,32 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // (issue #678), so it can only be switched off, with the hint below saying what to do first
     let usable =
         list["embedder"].as_str().is_some_and(|id| list["models"].as_array().into_iter().flatten().any(|m| m["id"] == id && m["installed"] == true));
-    let r = ui
-        .add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
-        .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."));
-    register(ui, "check:settings.facesEnabled", r.rect);
-    if r.changed() {
+    let mobile = app.services.mobile;
+    let changed = if mobile {
+        // a phone's switch row (`settings::widgets::check`), off while there is nothing to run
+        ui.add_enabled_ui(on || (runtime && usable), |ui| check(ui, "settings.facesEnabled", &mut on, "Recognise faces")).inner
+    } else {
+        let r = ui
+            .add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
+            .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."));
+        register(ui, "check:settings.facesEnabled", r.rect);
+        r.changed()
+    };
+    if changed {
         match app.run("faces.enable", json!({"enabled": on})) {
             Ok(_) => app.caches.faces_epoch += 1,
             Err(e) => app.toast(ui.ctx(), e),
         }
     }
-    hint(ui, t, "Suggests who is in a photo from the faces you have named. Everything stays on your computer.");
+    hint(
+        ui,
+        t,
+        if mobile {
+            "Suggests who is in a photo from the faces you have named. Everything stays on this device."
+        } else {
+            "Suggests who is in a photo from the faces you have named. Everything stays on your computer."
+        },
+    );
     if !runtime {
         hint(ui, t, "This build cannot run recognition models: they can be added and chosen, not used.");
     } else if !usable {
@@ -297,17 +312,33 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
     let downloads =
         app.session.execute("faces.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
-    gpu_section(app, ui, t, &list["gpu"]);
+    // (a phone picks its own processor for them)
+    if !mobile {
+        gpu_section(app, ui, t, &list["gpu"]);
+    }
     heading(ui, t, "Face detector");
     for m in all.iter().filter(|m| m["role"] == "detector") {
         model_row(app, ui, t, m, downloads.iter().find(|d| d["id"] == m["id"]), runtime);
     }
     if !all.iter().any(|m| m["role"] == "detector" && m["installed"] == true) {
-        hint(ui, t, "Detect Faces (Photo menu) needs it: a small one-time download.");
+        hint(
+            ui,
+            t,
+            if mobile {
+                "Finding faces needs it: a small one-time download."
+            } else {
+                "Detect Faces (Photo menu) needs it: a small one-time download."
+            },
+        );
     }
     heading(ui, t, "Recognition models");
-    for m in all.iter().filter(|m| m["role"] == "embedder") {
+    for m in all.iter().filter(|m| m["role"] == "embedder" && (!mobile || fits_a_phone(m))) {
         model_row(app, ui, t, m, downloads.iter().find(|d| d["id"] == m["id"]), runtime);
+    }
+    if mobile {
+        hint(ui, t, "Larger models, such as AuraFace, are for computers: on a phone they would take seconds a face and most of the app's memory.");
+        footer(ui, t, &all);
+        return;
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -323,10 +354,24 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     for e in list["catalog"]["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).take(3) {
         ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.caution)).wrap());
     }
+    footer(ui, t, &all);
+}
+
+/// Which detector finds the faces.
+fn footer(ui: &mut egui::Ui, t: &Tokens, all: &[Value]) {
     if let Some(d) = all.iter().find(|m| m["role"] == "detector") {
         ui.add_space(4.0);
         hint(ui, t, &format!("Faces are found by {} ({}, included).", d["name"].as_str().unwrap_or("the detector"), mb(d["sizeBytes"].as_u64())));
     }
+}
+
+/// Largest recognition model a phone or tablet is offered (bytes): SFace (39 MB) fits, AuraFace
+/// (261 MB, about 24 GFLOPs a face) would take seconds a face and most of the app's memory.
+const PHONE_MODEL_MAX: u64 = 100 * 1024 * 1024;
+
+/// Whether a recognition model is one for a phone: not AuraFace, nor anything as large.
+fn fits_a_phone(m: &Value) -> bool {
+    m["id"] != "auraface-v1" && m["sizeBytes"].as_u64().is_none_or(|b| b <= PHONE_MODEL_MAX)
 }
 
 /// How the scan is going: a bar while photos are left, then how many faces it learned.
@@ -873,5 +918,19 @@ mod tests {
         // running and just-arrived ones are watched; failed, cancelled and vanished ones are dropped
         assert_eq!(keep, ["a", "b"]);
         assert_eq!(due(&[], vec!["x".into()]), (vec![], vec![]));
+    }
+}
+
+#[cfg(test)]
+mod phone_tests {
+    use super::fits_a_phone;
+    use serde_json::json;
+
+    #[test]
+    fn a_phone_is_offered_sface_not_auraface_or_anything_as_large() {
+        assert!(fits_a_phone(&json!({"id": "sface-2021dec", "sizeBytes": 38_700_000})));
+        assert!(!fits_a_phone(&json!({"id": "auraface-v1", "sizeBytes": 261_000_000})));
+        assert!(!fits_a_phone(&json!({"id": "someone-elses", "sizeBytes": 200_000_000})), "as large as AuraFace");
+        assert!(fits_a_phone(&json!({"id": "small-unknown-size"})), "a size not known yet");
     }
 }
