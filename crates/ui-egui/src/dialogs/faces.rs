@@ -76,6 +76,15 @@ fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
     v
 }
 
+/// Tests: answer the model list as a library where recognition can run but has no model yet (the
+/// headless app has no model folder, so it would say recognition is unavailable).
+#[cfg(test)]
+pub(crate) fn pretend_no_model_yet(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let v = json!({"dir": "/models", "runtime": true, "models": [], "embedder": null, "enabled": false});
+    let (epoch, now) = (app.caches.faces_epoch, app.tick_now());
+    ctx.data_mut(|d| d.insert_temp(list_id(), (epoch, now, v)));
+}
+
 /// What stands between the user and name suggestions, for the prompts where faces are shown or named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Setup {
@@ -152,15 +161,28 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let step = setup(app, ui.ctx());
     let Some((message, button)) = step.prompt() else { return };
     let t = Tokens::get(ui.ctx());
-    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(crate::i18n::tr(message)).font(t.font(12.5)).color(t.text_dim));
-            let r = ui.button(crate::i18n::tr(button));
+    // a phone: the message on its own lines, then a full-width button a finger can take
+    let phone = crate::panels::compact::is_compact(ui.ctx());
+    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, if phone { 10 } else { 6 })).show(ui, |ui| {
+        let clicked = if phone {
+            ui.add(egui::Label::new(RichText::new(crate::i18n::tr(message)).font(t.font(15.0)).color(t.text_dim)).wrap());
+            ui.add_space(8.0);
+            let r =
+                ui.add_sized(egui::vec2(ui.available_width(), 44.0), egui::Button::new(RichText::new(crate::i18n::tr(button)).font(t.font(16.0))));
             register(ui, "faces:setup", r.rect);
-            if r.clicked() {
-                take_step(app, ui.ctx(), step);
-            }
-        });
+            r.clicked()
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(crate::i18n::tr(message)).font(t.font(12.5)).color(t.text_dim));
+                let r = ui.button(crate::i18n::tr(button));
+                register(ui, "faces:setup", r.rect);
+                r.clicked()
+            })
+            .inner
+        };
+        if clicked {
+            take_step(app, ui.ctx(), step);
+        }
     });
 }
 

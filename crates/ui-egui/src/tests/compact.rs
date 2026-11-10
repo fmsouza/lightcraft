@@ -1467,3 +1467,22 @@ fn phone_survey_has_a_bar_for_the_photo_last_tapped() {
     click(&mut h, "button:surveyEdit");
     assert_eq!(h.app.ui.view, ViewMode::Detail, "Edit opens the editor");
 }
+
+#[test]
+fn phone_people_setup_button_is_full_width_and_finger_sized() {
+    let mut h = demo(PHONE, json!({"view": "people", "right": "none"}));
+    // (shown while recognition can run but has no model yet)
+    let ctx = h.view.ctx.clone();
+    crate::dialogs::faces::pretend_no_model_yet(&mut h.app, &ctx);
+    h.step();
+    h.step();
+    let b = widget(&h, "faces:setup").expect("Set up face recognition");
+    assert!(b.height() >= 44.0 && b.width() > PHONE[0] * 0.8, "a full-width finger's button: {b:?}");
+    let mut d = demo([1400.0, 900.0], json!({"view": "people"}));
+    let ctx = d.view.ctx.clone();
+    crate::dialogs::faces::pretend_no_model_yet(&mut d.app, &ctx);
+    d.step();
+    d.step();
+    let b = widget(&d, "faces:setup").expect("Set up face recognition");
+    assert!(b.height() < 32.0, "the desktop keeps its button: {b:?}");
+}
