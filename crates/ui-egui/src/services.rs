@@ -142,6 +142,10 @@ pub struct Services {
     /// storage can be read only while the system allows, so files added in place would go
     /// missing).
     pub import_copies: bool,
+    /// A phone or tablet app (iOS, Android): one library in the app's own storage, no folders to
+    /// pick or programs to open with, the system's colour management and GPU. Settings that only
+    /// make sense on a computer are left out there.
+    pub mobile: bool,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
 }

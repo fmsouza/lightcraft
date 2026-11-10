@@ -12,12 +12,28 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         }
     });
     let mut per = d.per_camera;
+    // (a phone or tablet keeps the two defaults; a default per camera body is a computer's job)
+    let mobile = super::mobile(app);
+    if !mobile {
+        per_camera(app, ui, t, &d, &mut per);
+    }
+    other_and_metadata(app, ui, t, &d);
+    // a phone or tablet app: the files sit in its own storage, which no other program reads, and
+    // nothing is dropped on it or plugged into it; the import settings stop here
+    if mobile {
+        return;
+    }
+    sidecars_and_auto(app, ui, t, &d);
+}
+
+/// Use camera-specific defaults, and the list of cameras with a default each.
+fn per_camera(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightcraft_engine::import::ImportDefaults, per: &mut bool) {
     row(ui, t, "", |ui| {
-        if check(ui, "settings.perCamera", &mut per, "Use camera-specific defaults") {
-            let _ = app.run("library.preferences", json!({"import": {"perCamera": per}}));
+        if check(ui, "settings.perCamera", per, "Use camera-specific defaults") {
+            let _ = app.run("library.preferences", json!({"import": {"perCamera": *per}}));
         }
     });
-    if per {
+    if *per {
         let cams = cameras(app);
         if cams.is_empty() {
             hint(ui, t, crate::i18n::tr("No raw photos yet: cameras appear here once their photos are in the library."));
@@ -65,6 +81,10 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+}
+
+/// The non-raw default, and the metadata added on import.
+fn other_and_metadata(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightcraft_engine::import::ImportDefaults) {
     heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
     row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Other preset"), d.other_preset.as_deref(), "None") {
@@ -117,6 +137,10 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+}
+
+/// XMP sidecars, dropped files, cameras and cards, the watched folder.
+fn sidecars_and_auto(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightcraft_engine::import::ImportDefaults) {
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {

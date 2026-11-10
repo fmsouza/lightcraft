@@ -78,19 +78,30 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
-    heading(ui, t, crate::i18n::tr("Filmstrip"));
-    check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
-    check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");
+    // (a phone has no filmstrip and no Square Grid)
+    let phone = crate::panels::compact::is_compact(ui.ctx());
+    if !phone {
+        heading(ui, t, crate::i18n::tr("Filmstrip"));
+        check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
+        check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");
+    }
     heading(ui, t, crate::i18n::tr("Grid"));
     row(ui, t, crate::i18n::tr("Ratings & flags"), |ui| {
         choices(
             ui,
             "settingsGridBadges",
-            &[(GridBadges::Auto, "When rated or hovered"), (GridBadges::Always, "Always"), (GridBadges::Never, "Never")],
+            // (a finger doesn't hover: there, the badges show on rated or selected photos)
+            &[
+                (GridBadges::Auto, if phone { "When rated or selected" } else { "When rated or hovered" }),
+                (GridBadges::Always, "Always"),
+                (GridBadges::Never, "Never"),
+            ],
             &mut app.ui.settings.grid_badges,
         );
     });
-    check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
+    if !phone {
+        check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
+    }
     heading(ui, t, crate::i18n::tr("Keywords"));
     row(ui, t, crate::i18n::tr("Keywords of the selection"), |ui| {
         use crate::state::KeywordChips as K;
@@ -107,7 +118,12 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         use crate::state::InfoOverlay as I;
         choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
     });
-    hint(ui, t, crate::i18n::tr("View → View Options chooses the lines Info 1 and Info 2 show."));
+    let options = if phone {
+        "… → All Menus → View → View Options chooses the lines Info 1 and Info 2 show."
+    } else {
+        "View → View Options chooses the lines Info 1 and Info 2 show."
+    };
+    hint(ui, t, crate::i18n::tr(options));
 }
 
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and

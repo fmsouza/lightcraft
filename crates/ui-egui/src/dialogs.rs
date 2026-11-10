@@ -158,6 +158,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
         });
+    // (upright on a phone, Settings draws a header of its own with ✕)
+    let phone_settings = settings && crate::panels::settings::portrait_phone(ctx);
+    let window = window.title_bar(!phone_settings);
     let window = if import {
         // inside the frame's margins and title bar
         let area = ctx.content_rect().shrink(8.0);
@@ -189,8 +192,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
             dialog_content(app, ui, &t, body_max, &mut confirm, &mut import_pressed, &mut dlg)
         });
-        // (the import review draws its own buttons, beside or under its photos)
-        if import {
+        // (the import review draws its own buttons, beside or under its photos; a phone's
+        // Settings closes with its header's ✕)
+        if import || phone_settings {
+            content_w = ui.min_rect().width();
             return;
         }
         ui.add_space(4.0);
@@ -208,6 +213,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         content_w = ui.min_rect().width();
     });
     crate::widgets::set_finger_scope(finger_before);
+    if phone_settings && crate::panels::settings::close_requested(ctx) {
+        close = true;
+    }
     match import_pressed {
         Some(crate::import::Footer::Cancel) => close = true,
         Some(crate::import::Footer::Import) => confirm = true,

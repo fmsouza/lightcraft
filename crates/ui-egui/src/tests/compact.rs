@@ -1486,3 +1486,76 @@ fn phone_people_setup_button_is_full_width_and_finger_sized() {
     let b = widget(&d, "faces:setup").expect("Set up face recognition");
     assert!(b.height() < 32.0, "the desktop keeps its button: {b:?}");
 }
+
+/// The phone app (`Services::mobile`), held upright, Settings open on `tab`.
+fn mobile_settings(tab: &str) -> Headless {
+    let services = Services { png: None, mobile: true, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, PHONE, 1.0);
+    let r = h.request("ui.set", json!({"view": "photoGrid", "right": "none"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.run("app.settings", json!({"tab": tab})).is_ok());
+    h.step();
+    h.step();
+    h
+}
+
+fn any_widget(h: &Headless, prefix: &str) -> bool {
+    h.app.widgets.iter().any(|(w, _)| w.starts_with(prefix))
+}
+
+#[test]
+fn mobile_settings_leave_out_what_only_a_computer_has() {
+    // the section list: no Display (the system manages a phone's colour)
+    let mut h = mobile_settings("general");
+    assert!(widget(&h, "button:settingsTab-general").is_some(), "the sections");
+    assert!(widget(&h, "button:settingsTab-display").is_none(), "no Display section");
+    click(&mut h, "button:settingsTab-general");
+    // General: a language dropdown, no library folders, startup or dialog choices
+    let lang = widget(&h, "combo:settingsLanguage").expect("the language dropdown");
+    assert!(lang.height() >= 44.0, "{lang:?}");
+    assert!(!any_widget(&h, "button:settingsLanguage-"), "not a row of every language");
+    assert!(widget(&h, "button:settingsOpenLibrary").is_none(), "no library folder");
+    assert!(widget(&h, "check:settings.autoAdvance").is_some(), "Culling stays");
+    assert!(widget(&h, "check:settings.askBeforeMove").is_none());
+    assert!(widget(&h, "check:settings.closeDialogsOutside").is_none());
+
+    // Performance: the cache's size on a slider, no GPU or memory choices, no smart preview folder
+    let mut h = mobile_settings("performance");
+    assert!(widget(&h, "slider:settingsCache").is_some(), "the cache slider");
+    // (the demo library isn't on disk, so it has no smart previews to count)
+    let on_disk = h.app.run("library.smartPreviewsLocation", json!({})).is_ok();
+    assert_eq!(widget(&h, "text:settingsSmartSize").is_some(), on_disk, "the smart previews' size where there are some");
+    for gone in ["check:settings.gpu", "button:settingsPreview-", "button:settingsMemory-", "button:settingsCache-", "button:settingsSmartChoose"] {
+        assert!(!any_widget(&h, gone), "{gone} is a computer's");
+    }
+
+    // Import: no XMP sidecars, dropped files or cards
+    let h = mobile_settings("import");
+    assert!(widget(&h, "settings:page").is_some());
+    for gone in ["check:settings.autoWriteXmp", "check:settings.importDropped", "check:settings.importOnCard", "button:settingsAutoFolder"] {
+        assert!(widget(&h, gone).is_none(), "{gone} is a computer's");
+    }
+
+    // a link to Display shows General
+    let h = mobile_settings("display");
+    assert!(widget(&h, "combo:settingsLanguage").is_some(), "General instead");
+}
+
+#[test]
+fn desktop_settings_keep_every_section() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    assert!(h.app.run("app.settings", json!({"tab": "general"})).is_ok());
+    h.step();
+    h.step();
+    assert!(widget(&h, "button:settingsTab-display").is_some());
+    assert!(any_widget(&h, "button:settingsLanguage-"), "every language as a choice");
+    assert!(widget(&h, "combo:settingsLanguage").is_none());
+    assert!(widget(&h, "button:settingsOpenLibrary").is_some());
+    assert!(h.app.run("app.settings", json!({"tab": "performance"})).is_ok());
+    h.step();
+    h.step();
+    assert!(widget(&h, "check:settings.gpu").is_some());
+    assert!(widget(&h, "slider:settingsCache").is_none());
+}

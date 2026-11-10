@@ -4,14 +4,62 @@ use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 // ------------------------------------------------------------------------------------- General
 
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let mobile = super::mobile(app);
     row(ui, t, crate::i18n::tr("Language"), |ui| {
         let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
-        // Thirteen language names do not fit one line in a narrow window: wrap them.
-        ui.horizontal_wrapped(|ui| {
-            choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
-        });
+        if mobile {
+            // a phone: one dropdown, not twenty buttons
+            language_dropdown(ui, &languages, &mut app.ui.language);
+        } else {
+            // Thirteen language names do not fit one line in a narrow window: wrap them.
+            ui.horizontal_wrapped(|ui| {
+                choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
+            });
+        }
         crate::i18n::set_language(app.ui.language);
     });
+    // a phone or tablet app keeps one library in its own storage, imports no Lightroom catalogs
+    // and opens on its photos: none of these choices apply there
+    if !mobile {
+        library_rows(app, ui, t);
+        heading(ui, t, crate::i18n::tr("Startup"));
+        row(ui, t, crate::i18n::tr("Open in"), |ui| {
+            choices(
+                ui,
+                "settingsStartup",
+                &[(StartupView::Last, "Last view"), (StartupView::Grid, "Photo Grid"), (StartupView::Detail, "Detail View")],
+                &mut app.ui.settings.startup_view,
+            );
+        });
+    }
+    heading(ui, t, crate::i18n::tr("Culling"));
+    check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
+    check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
+    if mobile {
+        // (no folders on disk to move photos to; a sheet closes with a tap outside it)
+        return;
+    }
+    check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
+    heading(ui, t, crate::i18n::tr("Dialogs"));
+    check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
+    external_editing(app, ui, t);
+}
+
+/// Language as one dropdown (`combo:settingsLanguage`).
+fn language_dropdown(ui: &mut egui::Ui, languages: &[(crate::i18n::Locale, &str)], current: &mut crate::i18n::Locale) {
+    let shown = languages.iter().find(|(l, _)| l == current).map_or("", |(_, n)| *n);
+    let r = crate::widgets::combo_box("settingsLanguage").width(ui.available_width().min(260.0)).selected_text(shown).show_ui(ui, |ui| {
+        for (l, name) in languages {
+            ui.selectable_value(current, *l, *name);
+        }
+    });
+    crate::widgets::name_combo(&r.response, crate::i18n::tr("Language"));
+    register(ui, "combo:settingsLanguage", r.response.rect);
+}
+
+/// The library's location, Open / New Library, the one to open at launch, and where a Lightroom
+/// catalog goes: a computer's libraries are folders.
+fn library_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Library"));
     let location = match &app.session.library {
         Some(l) => l.dir.display().to_string(),
@@ -60,21 +108,10 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.lightroom_import,
         );
     });
-    heading(ui, t, crate::i18n::tr("Startup"));
-    row(ui, t, crate::i18n::tr("Open in"), |ui| {
-        choices(
-            ui,
-            "settingsStartup",
-            &[(StartupView::Last, "Last view"), (StartupView::Grid, "Photo Grid"), (StartupView::Detail, "Detail View")],
-            &mut app.ui.settings.startup_view,
-        );
-    });
-    heading(ui, t, crate::i18n::tr("Culling"));
-    check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
-    check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
-    check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
-    heading(ui, t, crate::i18n::tr("Dialogs"));
-    check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
+}
+
+/// Edit In: PhotoCraft and another editor, and the file each is handed.
+fn external_editing(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("External Editing"));
     row(ui, t, crate::i18n::tr("PhotoCraft"), |ui| {
         field(

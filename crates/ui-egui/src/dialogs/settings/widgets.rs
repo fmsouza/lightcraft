@@ -60,6 +60,14 @@ pub(super) fn field(ui: &mut egui::Ui, field: crate::text_field::TextField<'_>) 
 }
 
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
+    if crate::widgets::finger_ui(ui) {
+        // a phone's settings: a line between sections, then the section's name in small capitals
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.label(RichText::new(crate::i18n::tr(text).to_uppercase()).font(t.font(14.0)).color(t.text_dim));
+        return;
+    }
     ui.add_space(4.0);
     ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
 }
@@ -88,14 +96,48 @@ pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnc
 }
 
 pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
+    let size = if crate::widgets::finger_ui(ui) { 14.0 } else { 11.0 };
+    ui.label(RichText::new(crate::i18n::tr(text)).size(size).color(t.text_dim));
 }
 
-/// A checkbox addressable as `check:{id}`; true when toggled.
+/// A checkbox addressable as `check:{id}`; true when toggled. Where controls are finger-sized it
+/// is a phone's switch: the label on the left, the switch at the right edge, the whole row a target.
 pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
+    if crate::widgets::finger_ui(ui) {
+        return switch_row(ui, id, value, crate::i18n::tr(label));
+    }
     let r = ui.checkbox(value, crate::i18n::tr(label));
     register(ui, format!("check:{id}"), r.rect);
     r.changed()
+}
+
+/// Size of a switch (points).
+const SWITCH: egui::Vec2 = egui::vec2(50.0, 30.0);
+
+fn switch_row(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let font = t.font(16.0);
+    let text_w = (w - SWITCH.x - 16.0).max(40.0);
+    let galley = ui.painter().layout(label.to_string(), font, t.text, text_w);
+    let h = (galley.size().y + 12.0).max(44.0);
+    let (r, mut resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    register(ui, format!("check:{id}"), r);
+    if resp.clicked() {
+        *value = !*value;
+        resp.mark_changed();
+    }
+    let on = *value;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, label));
+    let p = ui.painter();
+    p.galley(egui::pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, t.text);
+    let how_on = ui.ctx().animate_bool_responsive(resp.id, on);
+    let track = egui::Rect::from_center_size(egui::pos2(r.right() - SWITCH.x / 2.0, r.center().y), SWITCH);
+    let off_fill = t.text_dim.gamma_multiply(0.35);
+    p.rect_filled(track, SWITCH.y / 2.0, crate::widgets::lerp(off_fill, t.accent, how_on));
+    let knob_x = egui::lerp((track.left() + SWITCH.y / 2.0)..=(track.right() - SWITCH.y / 2.0), how_on);
+    p.circle_filled(egui::pos2(knob_x, track.center().y), SWITCH.y / 2.0 - 3.0, egui::Color32::WHITE);
+    resp.changed()
 }
 
 /// Mutually exclusive buttons (`button:{id}-{index}`).

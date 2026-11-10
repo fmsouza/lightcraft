@@ -29,6 +29,18 @@ mod performance;
 mod slideshow;
 mod widgets;
 
+/// Whether Settings is shown in a phone or tablet app (`Services::mobile`): settings that only mean
+/// something on a computer (folders, other programs, monitors, GPU and memory) are left out.
+pub(super) fn mobile(app: &LightcraftApp) -> bool {
+    app.services.mobile
+}
+
+/// The tabs this host shows: a phone or tablet app has no Display tab (its monitor profile is the
+/// system's colour management).
+fn tabs(app: &LightcraftApp) -> Vec<(&'static str, &'static str)> {
+    TABS.iter().copied().filter(|(id, _)| !(mobile(app) && *id == "display")).collect()
+}
+
 pub use display::display_profile;
 pub(super) use display::view_options;
 use display::{display_tab, interface_tab};
@@ -68,6 +80,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
     match tab {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
+        // (a phone or tablet app has no Display tab: a link to it shows General)
+        "display" if mobile(app) => general_tab(app, ui, &t),
         "display" => display_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
         "slideshow" => slideshow_tab(app, ui, &t, true),
@@ -96,7 +110,20 @@ const PREVIEW_CHROME: f32 = 82.0;
 /// The phone layout's Settings: the sections as finger-sized rows (true: that list is the page,
 /// nothing more to draw), or above a section's page, ‹ back to them and its name. A plain Settings
 /// opens on the list; one opened on another section opens that section's page.
-fn phone_sections(ui: &mut egui::Ui, tab: &mut String) -> bool {
+/// A phone held upright: Settings fills the screen with a header of its own (‹ back to the list
+/// of sections, the page's name, ✕), as a phone's settings do; the dialog's title bar and Close
+/// button are left out ([`super::super::dialogs`]).
+pub(crate) fn portrait_phone(ctx: &egui::Context) -> bool {
+    crate::panels::compact::is_compact(ctx) && ctx.content_rect().width() < crate::panels::compact::COMPACT_WIDTH
+}
+
+/// Set for a frame when the header's ✕ is tapped; the dialog takes it and closes.
+pub(crate) fn close_requested(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("settings-phone-close"))).unwrap_or(false)
+}
+
+/// The header and, on the list, the sections as rows; true while the list is what shows (no page).
+fn phone_sections(ui: &mut egui::Ui, tab: &mut String, tabs: &[(&'static str, &'static str)]) -> bool {
     let t = Tokens::get(ui.ctx());
     let key = egui::Id::unique("settings-phone-page");
     let pass = ui.ctx().cumulative_pass_nr();
@@ -106,33 +133,45 @@ fn phone_sections(ui: &mut egui::Ui, tab: &mut String) -> bool {
         // (AI Denoise from its panel, Faces …) goes straight to its page
         open = tab != "general";
     }
-    let row = |ui: &mut egui::Ui, id: String, label: &str, back: bool| -> bool {
-        let w = ui.available_width();
-        let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 48.0), egui::Sense::click());
+    // the header: ‹ on a page, its name (or Settings) in the middle, ✕ at the right
+    let w = ui.available_width();
+    let (bar, _) = ui.allocate_exact_size(egui::vec2(w, 48.0), egui::Sense::hover());
+    let icon_button = |ui: &mut egui::Ui, id: &str, x: f32, icon: crate::icons::Icon, label: &str| -> bool {
+        let r = egui::Rect::from_center_size(egui::pos2(x, bar.center().y), egui::vec2(44.0, 44.0));
+        let resp = ui.interact(r, egui::Id::unique(id), egui::Sense::click());
         register(ui, id, r);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-        let p = ui.painter();
         if resp.is_pointer_button_down_on() {
-            p.rect_filled(r, 8.0, t.hover);
+            ui.painter().circle_filled(r.center(), 20.0, t.hover);
         }
-        let (icon, x) = if back { (crate::icons::Icon::ChevronLeft, r.left() + 12.0) } else { (crate::icons::Icon::ChevronRight, r.right() - 12.0) };
-        crate::icons::paint(p, egui::Rect::from_center_size(egui::pos2(x, r.center().y), egui::vec2(16.0, 16.0)), icon, t.text_dim);
-        let text_x = if back { r.left() + 30.0 } else { r.left() + 8.0 };
-        p.text(egui::pos2(text_x, r.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), if back { t.accent } else { t.text });
+        crate::icons::paint(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(20.0, 20.0)), icon, t.text);
         resp.clicked()
     };
+    let title = tabs.iter().find(|(id, _)| open && id == tab).map_or(crate::i18n::tr("Settings"), |(_, label)| crate::i18n::tr(label));
+    ui.painter().text(bar.center(), egui::Align2::CENTER_CENTER, title, t.semibold(17.0), t.text);
     let mut list = !open;
-    if open {
-        if row(ui, "button:settingsBack".into(), crate::i18n::tr("All Settings"), true) {
-            open = false;
-            list = true;
-        } else if let Some((_, label)) = TABS.iter().find(|(id, _)| id == tab) {
-            ui.label(egui::RichText::new(crate::i18n::tr(label)).font(t.semibold(18.0)).color(t.text));
-        }
+    if open && icon_button(ui, "button:settingsBack", bar.left() + 18.0, crate::icons::Icon::ChevronLeft, crate::i18n::tr("All Settings")) {
+        open = false;
+        list = true;
+    }
+    if icon_button(ui, "button:settingsClose", bar.right() - 18.0, crate::icons::Icon::Close, crate::i18n::tr("Close")) {
+        ui.data_mut(|d| d.insert_temp(egui::Id::unique("settings-phone-close"), true));
     }
     if list {
-        for (id, label) in TABS {
-            if row(ui, format!("button:settingsTab-{id}"), crate::i18n::tr(label), false) {
+        ui.separator();
+        for (id, label) in tabs {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 48.0), egui::Sense::click());
+            register(ui, format!("button:settingsTab-{id}"), r);
+            let label = crate::i18n::tr(label);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            let p = ui.painter();
+            if resp.is_pointer_button_down_on() {
+                p.rect_filled(r, 8.0, t.hover);
+            }
+            let chevron = egui::Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
+            crate::icons::paint(p, chevron, crate::icons::Icon::ChevronRight, t.text_dim);
+            p.text(egui::pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, label, t.font(16.0), t.text);
+            if resp.clicked() {
                 *tab = id.to_string();
                 open = true;
             }
@@ -159,18 +198,18 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     // The page drawn is the one that was open when the frame began: a tab clicked now opens on
     // the next frame, so a text box on the page being left is drawn once more and saves what was
     // typed in it (the click took the focus from it).
+    let tabs = tabs(app);
     let shown = tab.clone();
-    let portrait_phone = crate::panels::compact::is_compact(ui.ctx()) && ui.ctx().content_rect().width() < crate::panels::compact::COMPACT_WIDTH;
-    if portrait_phone {
+    if portrait_phone(ui.ctx()) {
         // a phone held upright: the sections as a list, a section's page with ‹ back to it (held
         // sideways it has the width for the tab bar)
-        if phone_sections(ui, tab) {
+        if phone_sections(ui, tab, &tabs) {
             return;
         }
     } else {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-            for (id, label) in TABS {
+            for (id, label) in &tabs {
                 if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, shown == *id).clicked() {
                     *tab = id.to_string();
                     ui.ctx().request_repaint();
@@ -193,7 +232,7 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     // (at least the least tall slide); where that leaves less than [`PAGE_MIN_HEIGHT`] for the
     // page, it scrolls with the page instead (as in the short window above).
     let mut pinned = false;
-    if shown == "slideshow" {
+    if shown == "slideshow" && !mobile(app) {
         let slide_h = (height * PINNED_PREVIEW_SHARE - PREVIEW_CHROME).max(crate::panels::slide_layout::PREVIEW_MIN_H);
         if height - (slide_h + PREVIEW_CHROME) >= PAGE_MIN_HEIGHT {
             let before = ui.cursor().top();

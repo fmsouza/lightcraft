@@ -20,6 +20,8 @@ mod android_jni;
 #[cfg(target_os = "ios")]
 mod ios_files;
 #[cfg(target_os = "ios")]
+mod ios_fonts;
+#[cfg(target_os = "ios")]
 mod ios_keys;
 #[cfg(target_os = "ios")]
 mod ios_orientation;
@@ -453,6 +455,7 @@ fn services(export_dir: String, ctx: &egui::Context) -> Services {
         // iOS: a picked folder outside the sandbox is readable only for a while, so the library
         // copies it; Android's picker copies a folder into the library already
         import_copies: cfg!(target_os = "ios"),
+        mobile: true,
         #[cfg(target_os = "ios")]
         open_url: Some(Box::new(|url: &str| https(url).and_then(ios_files::open_url))),
         #[cfg(target_os = "android")]
@@ -642,6 +645,9 @@ pub fn run(mut options: eframe::NativeOptions, library_dir: std::path::PathBuf, 
                     lightcraft_ui_egui::theme::add_fallback_font("system CJK", font);
                 }
             }
+            // the system's fonts: SF for the interface, and every script the phone can show
+            #[cfg(target_os = "ios")]
+            ios_fonts::install();
             #[cfg(target_os = "ios")]
             {
                 ios_scene::set_context(&_cc.egui_ctx);
