@@ -1425,3 +1425,22 @@ fn phone_presets_list_shows_looks_in_finger_sized_rows() {
         assert!(row.height() < 30.0, "{row:?}");
     }
 }
+
+#[test]
+fn phone_compare_stacks_the_photos_over_a_bar_of_buttons() {
+    let mut h = demo(PHONE, json!({"view": "compare", "right": "none"}));
+    let (sel, cand) = crate::panels::compare::compare_pair(&mut h.app).expect("a pair to compare");
+    let (top, bottom) = (widget(&h, &format!("cull:{}", sel.0)).expect("Select"), widget(&h, &format!("cull:{}", cand.0)).expect("Candidate"));
+    assert!(top.bottom() <= bottom.top(), "Select above Candidate: {top:?} {bottom:?}");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("film:")), "no filmstrip on a phone");
+    for id in ["button:comparePrevious", "button:compareSwap", "button:compareRate", "button:compareMakeSelect", "button:compareNext"] {
+        assert!(widget(&h, id).unwrap_or_else(|| panic!("{id}")).height() >= 44.0, "{id}");
+    }
+    click(&mut h, "button:compareSwap");
+    assert_eq!(crate::panels::compare::compare_pair(&mut h.app), Some((cand, sel)), "Swap");
+    click(&mut h, "button:compareNext");
+    let (_, next) = crate::panels::compare::compare_pair(&mut h.app).expect("a pair");
+    assert_ne!(next, sel, "Next brings another candidate");
+    click(&mut h, "button:compareRate");
+    assert!(widget(&h, "panel:rateSheet").is_some(), "Rate opens the Rate sheet");
+}

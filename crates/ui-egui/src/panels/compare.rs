@@ -187,10 +187,12 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
 
 fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
     let full = ui.max_rect();
-    let film_h = if app.ui.filmstrip { super::detail::film_height(ui.ctx(), full) } else { 0.0 };
+    // a phone has no filmstrip (as in its editor): the room goes to the photos
+    let film = app.ui.filmstrip && !super::compact::is_compact(ui.ctx());
+    let film_h = if film { super::detail::film_height(ui.ctx(), full) } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
-    if app.ui.filmstrip {
+    if film {
         super::detail::filmstrip(app, ui, Rect::from_min_max(pos2(full.left(), canvas.bottom()), full.max));
     }
     canvas
@@ -506,12 +508,24 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         super::empty_message(ui, canvas, "Nothing to compare", "Select two photos, then choose View → Compare (Shift+C)");
         return;
     };
-    let area = canvas.shrink(18.0);
-    let half = (area.width() - 16.0) / 2.0;
-    let panes = [
-        (sel, Rect::from_min_size(area.min, vec2(half, area.height())), "Select", 0u8),
-        (cand, Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height())), "Candidate", 1u8),
-    ];
+    // a phone held upright: Select above Candidate (side by side they'd be slivers), and a bar of
+    // finger-sized buttons for what the desktop does with keys and the filmstrip
+    let upright = super::compact::is_compact(ui.ctx()) && canvas.width() < super::compact::COMPACT_WIDTH;
+    let canvas = if upright { phone_bar(app, ui, canvas, sel, cand) } else { canvas };
+    let area = canvas.shrink(if upright { 8.0 } else { 18.0 });
+    let panes = if upright {
+        let half = (area.height() - 12.0) / 2.0;
+        [
+            (sel, Rect::from_min_size(area.min, vec2(area.width(), half)), "Select", 0u8),
+            (cand, Rect::from_min_size(pos2(area.left(), area.bottom() - half), vec2(area.width(), half)), "Candidate", 1u8),
+        ]
+    } else {
+        let half = (area.width() - 16.0) / 2.0;
+        [
+            (sel, Rect::from_min_size(area.min, vec2(half, area.height())), "Select", 0u8),
+            (cand, Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height())), "Candidate", 1u8),
+        ]
+    };
     let zoom = app.ui.zoom;
     for (id, r, label, i) in panes {
         let (img, resp) = photo_tile(app, ui, id, Slot::Compare(i), r, label, zoom);
@@ -535,8 +549,64 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             super::grid::context_menu(app, ui, id);
         });
     }
-    let mid = area.center().x;
-    ui.painter().line_segment([pos2(mid, area.top()), pos2(mid, area.bottom())], Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
+    let divider = Stroke::new(1.0, Tokens::get(ui.ctx()).divider);
+    if upright {
+        let mid = area.center().y;
+        ui.painter().line_segment([pos2(area.left(), mid), pos2(area.right(), mid)], divider);
+    } else {
+        let mid = area.center().x;
+        ui.painter().line_segment([pos2(mid, area.top()), pos2(mid, area.bottom())], divider);
+    }
+}
+
+/// The phone's Compare bar along the bottom of `canvas`: the previous and next candidate, Swap,
+/// Rate (the Rate sheet, for the photo last tapped) and Make Candidate the Select. Returns what is
+/// left above it for the photos.
+fn phone_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, sel: PhotoId, cand: PhotoId) -> Rect {
+    const BAR_H: f32 = 60.0;
+    let t = Tokens::get(ui.ctx());
+    let bar = Rect::from_min_max(pos2(canvas.left(), canvas.bottom() - BAR_H), canvas.max);
+    ui.painter().rect_filled(bar, 0.0, t.chrome);
+    register(ui, "panel:compareBar", bar);
+    let buttons: [(&str, Icon, &str); 5] = [
+        ("comparePrevious", Icon::ChevronLeft, "Previous"),
+        ("compareSwap", Icon::Flip, "Swap"),
+        ("compareRate", Icon::Star, "Rate"),
+        ("compareMakeSelect", Icon::Check, "Make Select"),
+        ("compareNext", Icon::ChevronRight, "Next"),
+    ];
+    let w = bar.width() / buttons.len() as f32;
+    for (i, (id, icon, label)) in buttons.into_iter().enumerate() {
+        let r = Rect::from_min_size(pos2(bar.left() + i as f32 * w, bar.top()), vec2(w, BAR_H));
+        let resp = ui.interact(r, egui::Id::unique(("compare-bar", id)), Sense::click());
+        register(ui, format!("button:{id}"), r);
+        crate::widgets::announce(&resp, crate::i18n::tr(label));
+        let p = ui.painter();
+        if resp.is_pointer_button_down_on() {
+            p.rect_filled(r.shrink(2.0), 8.0, t.hover);
+        }
+        paint(p, Rect::from_center_size(pos2(r.center().x, r.top() + 22.0), vec2(20.0, 20.0)), icon, t.icon);
+        p.text(pos2(r.center().x, r.bottom() - 12.0), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(11.0), t.text_label);
+        if !resp.clicked() {
+            continue;
+        }
+        let r = match id {
+            "comparePrevious" => compare_step(app, -1),
+            "compareNext" => compare_step(app, 1),
+            "compareSwap" => swap(app),
+            "compareMakeSelect" => make_select(app),
+            _ => {
+                // the photo last tapped (the Candidate until one is)
+                let rate = app.session.active().filter(|a| *a == sel || *a == cand).unwrap_or(cand);
+                super::rate_sheet::open(ui.ctx(), vec![rate]);
+                Ok(Value::Null)
+            }
+        };
+        if let Err(e) = r {
+            app.toast(ui.ctx(), e);
+        }
+    }
+    Rect::from_min_max(canvas.min, pos2(canvas.right(), bar.top()))
 }
 
 /// Columns for `n` tiles of aspect ~3:2 in `area`, maximizing the tile size.
