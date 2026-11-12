@@ -1819,8 +1819,24 @@ fn phone_about_is_a_sheet_like_settings() {
     assert!(row.height() >= 44.0 && row.width() > PHONE[0] * 0.8, "{row:?}");
     click(&mut h, "about:contributors");
     assert!(widget(&h, "about:contributors").is_none() && widget(&h, "button:aboutBack").is_some(), "Contributors' page");
+    let row = widget(&h, "credit:echelon").or_else(|| h.app.widgets.iter().find(|(w, _)| w.starts_with("credit:")).map(|(_, r)| *r));
+    assert!(row.is_some_and(|r| r.height() >= 44.0 && r.width() > PHONE[0] * 0.8), "each contributor a row: {row:?}");
+    assert!(widget(&h, "button:creditsTable").is_none(), "no desktop table");
     click(&mut h, "button:aboutBack");
     assert!(widget(&h, "about:contributors").is_some(), "back on the first page");
+    // What's New and System Info are pages in the sheet, so ‹ comes back to About
+    for page in ["about:app.whatsNew", "about:app.systemInfo"] {
+        click(&mut h, page);
+        assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::About)), "{page}: still About");
+        assert!(widget(&h, "button:aboutBack").is_some(), "{page}: a page with ‹");
+        click(&mut h, "button:aboutBack");
+        assert!(widget(&h, "about:contributors").is_some(), "{page}: back on About");
+    }
+    // System Info: what a phone's owner reads, and the rest copied for a report
+    click(&mut h, "about:app.systemInfo");
+    assert!(widget(&h, "sysinfo:Version").is_some() && widget(&h, "sysinfo:Photos").is_some());
+    assert!(widget(&h, "sysinfo:Frame time").is_none() && widget(&h, "sysinfo:Memory budget").is_none(), "no performance figures");
+    assert!(widget(&h, "button:sysinfoCopy").is_some(), "Copy Details");
     click(&mut h, "button:aboutClose");
     assert!(h.app.ui.dialog.is_none(), "✕ closes it");
 }
