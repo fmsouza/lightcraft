@@ -257,6 +257,8 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         export_dir: None,
         share: None,
         save_to_photos: None,
+        mobile: false,
+        menu_button: None,
         import_copies: false,
         // the browser reports prefers-color-scheme to egui
         system_theme: None,

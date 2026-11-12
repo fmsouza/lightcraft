@@ -247,6 +247,8 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         export_dir: None,
         share: None,
         save_to_photos: None,
+        mobile: false,
+        menu_button: None,
         import_copies: false,
         system_theme: appearance::service(),
     }
