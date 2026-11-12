@@ -395,6 +395,66 @@ fn pinch_zooms_the_loupe_about_the_fingers_and_back_to_fit() {
 }
 
 #[test]
+fn phone_tap_hides_the_editor_and_double_tap_zooms_to_100_and_back() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    touch_screen(&mut h);
+    let tap = |h: &mut Headless| {
+        let c = loupe(h).center();
+        touch_drag(h, c, c, 0);
+    };
+    let wait = |h: &mut Headless| {
+        for _ in 0..40 {
+            h.step();
+        }
+    };
+    let with_chrome = loupe(&h);
+    // one tap: the bars and the sheet go (once a second tap can no longer come), the photo takes
+    // the screen, centred
+    tap(&mut h);
+    wait(&mut h);
+    assert!(widget(&h, "icon:more").is_none() && widget(&h, "panel:sheet").is_none(), "the editor's chrome hid");
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "the sheet stays chosen");
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit, "a tap doesn't zoom");
+    let alone = loupe(&h);
+    assert!(alone.width() >= with_chrome.width() && alone.height() > with_chrome.height(), "larger: {with_chrome:?} → {alone:?}");
+    assert!((alone.center().y - PHONE[1] / 2.0).abs() < 2.0, "centred on the screen: {alone:?}");
+    tap(&mut h);
+    wait(&mut h);
+    assert!(widget(&h, "icon:more").is_some() && widget(&h, "panel:sheet").is_some(), "and came back");
+    // two taps: 100 %, then two more: Fit; the chrome stays as it was
+    tap(&mut h);
+    tap(&mut h);
+    wait(&mut h);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Percent(100.0));
+    assert!(widget(&h, "icon:more").is_some(), "a double tap leaves the chrome");
+    tap(&mut h);
+    tap(&mut h);
+    wait(&mut h);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit);
+}
+
+#[test]
+fn phone_tap_in_crop_hides_the_chrome_but_leaves_the_photo_in_place() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "crop"}));
+    touch_screen(&mut h);
+    let before = loupe(&h);
+    let c = before.center();
+    touch_drag(&mut h, c, c, 0);
+    for _ in 0..40 {
+        h.step();
+    }
+    assert!(crate::panels::compact::chrome_hidden(&h.view.ctx), "the bars are covered");
+    assert_eq!(loupe(&h), before, "the photo stays where it was");
+    // a tap on the cover brings them back
+    let top = egui::pos2(PHONE[0] / 2.0, 20.0);
+    touch_drag(&mut h, top, top, 0);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(!crate::panels::compact::chrome_hidden(&h.view.ctx), "back");
+}
+
+#[test]
 fn trackpad_pinch_over_the_loupe_zooms() {
     let mut h = demo([1400.0, 900.0], json!({"view": "detail", "right": "none"}));
     let fit = loupe(&h);

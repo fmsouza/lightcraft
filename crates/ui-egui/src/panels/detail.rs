@@ -710,7 +710,13 @@ struct ToolView<'a> {
 fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, tv: &ToolView, v: &Views) {
     let (map, d) = (tv.map, tv.d);
     match tv.right {
-        RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),
+        RightPanel::Crop => {
+            crop_overlay(app, ui, resp, map, tv.frame, d, tv.id);
+            // a phone: a tap hides the bars and sheet here too (the photo stays put)
+            if crate::panels::compact::is_compact(&resp.ctx) && crate::widgets::touch_screen(&resp.ctx) {
+                phone_taps(app, resp, tv.map.rect, false);
+            }
+        }
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
         RightPanel::Remove => remove_overlay(app, ui, resp, map, d),
         RightPanel::RedEye => eye_overlay(app, ui, resp, map, d),
@@ -1085,6 +1091,14 @@ pub(crate) fn zoomed(img: Rect, canvas: Rect) -> bool {
 /// Fit ↔ the chosen click-zoom ratio at the clicked point, a drag pans when zoomed.
 pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, canvas: Rect) {
     let zoomed = zoomed(img, canvas);
+    // a phone: a tap hides or shows the editor's bars and sheet, a double tap zooms (`phone_taps`)
+    if crate::panels::compact::is_compact(&resp.ctx) && crate::widgets::touch_screen(&resp.ctx) {
+        phone_taps(app, resp, img, true);
+        if zoomed && resp.dragged() {
+            pan_image(app, canvas, img, resp.drag_delta());
+        }
+        return;
+    }
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
@@ -1099,6 +1113,47 @@ pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response,
     }
     if zoomed && resp.dragged() {
         pan_image(app, canvas, img, resp.drag_delta());
+    }
+}
+
+/// A phone's taps on the photo, as its photo apps have them: a double tap zooms to 100 % where it
+/// lands, or back to Fit from any zoom (a pinch's too); a single tap hides or shows the editor's
+/// bars and sheet ([`crate::panels::compact::toggle_chrome`]), once the time for a second tap has
+/// passed, so a double tap doesn't also hide them. `zoom`: false where a double tap means
+/// something else (Crop: Done).
+fn phone_taps(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, zoom: bool) {
+    let ctx = &resp.ctx;
+    let pending = egui::Id::unique("loupe-tap-pending");
+    let now = ctx.input(|i| i.time);
+    let wait = ctx.options(|o| o.input_options.max_double_click_delay);
+    if resp.double_clicked() {
+        ctx.data_mut(|d| d.remove_temp::<f64>(pending));
+        if !zoom {
+            return;
+        }
+        if matches!(app.ui.zoom, Zoom::Fit) {
+            if let Some(q) = resp.interact_pointer_pos() {
+                let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
+                let v = ((q.y - img.top()) / img.height()).clamp(0.0, 1.0);
+                app.ui.pan = (u, v);
+            }
+            app.ui.zoom = Zoom::Percent(100.0);
+        } else {
+            app.ui.zoom = Zoom::Fit;
+        }
+        app.ui.zoom_anim = true;
+        return;
+    }
+    if resp.clicked() {
+        ctx.data_mut(|d| d.insert_temp(pending, now));
+    }
+    match ctx.data(|d| d.get_temp::<f64>(pending)) {
+        Some(at) if now - at > wait => {
+            ctx.data_mut(|d| d.remove_temp::<f64>(pending));
+            crate::panels::compact::toggle_chrome(ctx);
+        }
+        Some(_) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait)),
+        None => {}
     }
 }
 

@@ -112,6 +112,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         set_section(ui.ctx(), None);
     }
     let detail = app.ui.view == ViewMode::Detail;
+    // a tap on the photo hid the editor's bars and sheet: the photo takes the screen, but for
+    // Crop's, which stays where it is under a cover (`cover_chrome`)
+    if !detail || app.session.active().is_none() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(chrome_hidden_id()));
+    }
+    let hidden = detail && chrome_hidden(ui.ctx());
+    let cover = hidden && app.ui.right == RightPanel::Crop;
+    if hidden && !cover {
+        sideways_photo(app, ui.ctx());
+        return;
+    }
     if detail {
         editor_bar(app, ui);
     } else {
@@ -145,6 +156,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     super::more_sheet::show(app, ui.ctx());
     super::sort_sheet::show(app, ui.ctx());
     super::rate_sheet::show(app, ui.ctx());
+    if cover {
+        cover_chrome(ui.ctx(), ui.available_rect_before_wrap());
+    }
     sideways_photo(app, ui.ctx());
 }
 
@@ -660,6 +674,47 @@ fn trash_button(ui: &mut egui::Ui, enabled: bool) -> bool {
 fn close_sheet(app: &mut LightcraftApp) {
     app.ui.right = RightPanel::None;
     app.ui.presets = false;
+}
+
+fn chrome_hidden_id() -> egui::Id {
+    egui::Id::unique("compact-editor-chrome-hidden")
+}
+
+/// Whether a tap on the photo hid the editor's bars and sheet (as a phone photo editor does).
+pub fn chrome_hidden(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(chrome_hidden_id())).unwrap_or(false)
+}
+
+/// A tap on the photo in the editor: its bars and sheet go, or come back.
+pub(crate) fn toggle_chrome(ctx: &egui::Context) {
+    let hidden = !chrome_hidden(ctx);
+    ctx.data_mut(|d| d.insert_temp(chrome_hidden_id(), hidden));
+}
+
+/// Crop with the editor's chrome hidden: the bars and sheet keep their room, so the photo stays
+/// where it is, and are covered with the canvas's colour; a tap on them brings them back.
+/// `photo`: the room left for the photo.
+fn cover_chrome(ctx: &egui::Context, photo: Rect) {
+    let t = Tokens::get(ctx);
+    let screen = ctx.viewport_rect();
+    let parts = [
+        Rect::from_min_max(screen.min, egui::pos2(screen.right(), photo.top())),
+        Rect::from_min_max(egui::pos2(screen.left(), photo.bottom()), screen.max),
+        Rect::from_min_max(egui::pos2(screen.left(), photo.top()), egui::pos2(photo.left(), photo.bottom())),
+        Rect::from_min_max(egui::pos2(photo.right(), photo.top()), egui::pos2(screen.right(), photo.bottom())),
+    ];
+    for (i, r) in parts.into_iter().enumerate() {
+        if r.width() < 0.5 || r.height() < 0.5 {
+            continue;
+        }
+        egui::Area::new(egui::Id::unique("compact-chrome-cover").with(i)).order(egui::Order::Foreground).fixed_pos(r.min).show(ctx, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(r.size(), Sense::click());
+            ui.painter().rect_filled(rect, 0.0, t.canvas);
+            if resp.clicked() {
+                toggle_chrome(ctx);
+            }
+        });
+    }
 }
 
 /// What a tab of the editor's tool row opens.
