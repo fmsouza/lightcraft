@@ -116,8 +116,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         confirm = true;
     }
     let title = dialog_title(app, &dlg);
-    // (upright on a phone, Settings and About are sheets up from the bottom edge with a header of their own)
-    let phone_settings = matches!(dlg, Dialog::Settings { .. } | Dialog::About) && crate::panels::settings::portrait_phone(ctx);
+    let (phone_settings, sheet_footer) = phone_sheet(ctx, &dlg);
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
     // The import review takes most of the screen (its photo grid and options column scroll on
     // their own) and can be resized on the desktop; it keeps a window id of its own so the size
@@ -187,6 +186,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         // (Print lays itself out for the phone)
         if finger {
             crate::panels::compact::finger_style(ui);
+        }
+        if sheet_footer {
+            crate::panels::settings::sheet_header(ui, crate::i18n::tr(&title), None, "button:sheetClose");
+            ui.separator();
+            let room = (ui.available_height() - SHEET_FOOTER_H).max(DIALOG_MIN_BODY);
+            body_h = dialog_body(ui, Some(title.as_str()), room, |ui| dialog_content(app, ui, &t, room, &mut confirm, &mut import_pressed, &mut dlg));
+            footer(app, ui, &dlg, &mut close, &mut confirm);
+            content_w = ui.min_rect().width();
+            return;
         }
         body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
             dialog_content(app, ui, &t, body_max, &mut confirm, &mut import_pressed, &mut dlg)
@@ -593,6 +601,45 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     }
 }
 
+/// Upright on a phone, Settings, About, Assisted Culling and a face model's terms are sheets up
+/// from the bottom edge with a header of their own: (a sheet, with its confirm at its foot (the
+/// last two)).
+fn phone_sheet(ctx: &egui::Context, dlg: &Dialog) -> (bool, bool) {
+    let sheet = matches!(dlg, Dialog::Settings { .. } | Dialog::About | Dialog::Cull { .. } | Dialog::FaceModel { .. })
+        && crate::panels::settings::portrait_phone(ctx);
+    (sheet, sheet && matches!(dlg, Dialog::Cull { .. } | Dialog::FaceModel { .. }))
+}
+
+/// The room a phone sheet's confirm takes at its foot.
+const SHEET_FOOTER_H: f32 = 60.0;
+
+/// A phone sheet's confirm, the width of the sheet at its foot (its ✕ is the cancel).
+fn footer(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
+    let informational = is_informational(dlg);
+    let ok = match dlg {
+        // ("Cull 24 Photos": what it acts on, said once more where the finger goes)
+        Dialog::Cull { .. } => {
+            let n = app.session.selection.ids.len();
+            photos_ok_label("Cull", if n > 1 { n } else { app.session.visible_cloned().len() })
+        }
+        _ => ok_label(app, dlg, informational, &SamState::of(app)),
+    };
+    if ok.is_empty() {
+        return;
+    }
+    ui.add_space((ui.available_height() - SHEET_FOOTER_H + 6.0).max(4.0));
+    use crate::panels::settings::PhoneButton;
+    let style = if informational { PhoneButton::Tinted } else { PhoneButton::Filled };
+    let clicked = crate::panels::settings::phone_button(ui, "dialogOk", &ok, style, can_confirm(app, dlg, informational));
+    if clicked {
+        if informational {
+            *close = true;
+        } else {
+            *confirm = true;
+        }
+    }
+}
+
 /// Say where a folder made on disk is: the new folder holds no photos yet, so the Folders list may not show it.
 /// Shared by the dialog's button and `ui.dialog.confirm`.
 pub(crate) fn toast_created_folder(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &Dialog, made: &serde_json::Value) {
@@ -734,9 +781,61 @@ fn auto_stack_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: 
     );
 }
 
+/// Assisted Culling on a phone: what it looks at, then Focus and Bursts with the system's sliders
+/// and a switch, each explained under it.
+fn phone_cull(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    reject_below: &mut f32,
+    pick_best: &mut bool,
+    burst_gap: &mut f32,
+    similarity: &mut f32,
+) {
+    use crate::panels::settings::{check, heading, hint, phone_slider};
+    let n = app.session.selection.ids.len();
+    let scope = if n > 1 {
+        crate::i18n::tr_format!("the {n} selected photos", n = n)
+    } else {
+        crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len())
+    };
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(crate::i18n::tr_format!(
+            "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).",
+            scope = scope
+        ))
+        .font(t.font(15.0))
+        .color(t.text_label),
+    );
+    heading(ui, t, "Focus");
+    let mut v = f64::from(*reject_below);
+    phone_slider(ui, "cullReject", crate::i18n::tr("Reject below focus"), &mut v, 0.0..=80.0, false, Some(1.0), |v| {
+        if v <= 0.0 { crate::i18n::tr("Off").to_string() } else { format!("{v:.0}") }
+    });
+    *reject_below = v as f32;
+    hint(ui, t, if *reject_below > 0.0 { "Blurry photos below the score are flagged as rejects." } else { "Off: nothing is rejected." });
+    heading(ui, t, "Bursts");
+    check(ui, "cullPick", pick_best, "Pick the sharpest of each burst");
+    let mut v = f64::from(*burst_gap);
+    phone_slider(ui, "cullGap", crate::i18n::tr("Shots at most this far apart"), &mut v, 1.0..=600.0, true, None, crate::panels::dialogs::fmt_gap);
+    *burst_gap = v as f32;
+    let mut v = f64::from(*similarity);
+    phone_slider(ui, "cullSimilar", crate::i18n::tr("How alike"), &mut v, 0.70..=0.99, false, Some(0.01), |v| format!("{v:.2}"));
+    *similarity = v as f32;
+    clamp_cull_burst(burst_gap, similarity);
+    hint(ui, t, "Lower How alike when a panning or moving burst splits into several groups.");
+    ui.add_space(6.0);
+    hint(ui, t, "Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots.");
+}
+
 /// The body of the Cull dialog.
 fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::Cull { reject_below, pick_best, burst_gap, similarity } = dlg else { return };
+    if crate::panels::settings::portrait_phone(ui.ctx()) {
+        phone_cull(app, ui, t, reject_below, pick_best, burst_gap, similarity);
+        return;
+    }
     let n = app.session.selection.ids.len();
     let scope = if n > 1 {
         crate::i18n::tr_format!("the {n} selected photos", n = n)

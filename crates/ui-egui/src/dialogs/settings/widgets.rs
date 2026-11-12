@@ -263,6 +263,12 @@ pub(crate) fn subpage(ctx: &egui::Context) -> Option<SubPage> {
     ctx.data(|d| d.get_temp::<SubPage>(subpage_id()))
 }
 
+/// Push a page of the caller's own (`id`, shown under `title` with ‹ back): Settings asks
+/// [`crate::panels::settings::own_page`] to draw it.
+pub(crate) fn open_subpage(ctx: &egui::Context, id: &str, title: &str) {
+    ctx.data_mut(|d| d.insert_temp(subpage_id(), SubPage { id: id.to_string(), title: title.to_string(), options: Vec::new(), current: None }));
+}
+
 pub(crate) fn close_subpage(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<SubPage>(subpage_id()));
 }
@@ -449,4 +455,60 @@ mod path_tests {
         assert_eq!(fit("///", 2), "…");
         assert_eq!(fit(r"\\server\share\folder", 15), r"…\share\folder");
     }
+}
+
+/// How a [`phone_button`] looks: filled with the accent (the screen's main action), tinted (the
+/// others), or tinted red (one that removes something).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PhoneButton {
+    Filled,
+    Tinted,
+    Destructive,
+}
+
+/// A phone's button, as the system's: the width of the page, 50 pt tall, rounded, its label in
+/// semibold 17 pt (`button:{id}`).
+pub(crate) fn phone_button(ui: &mut egui::Ui, id: &str, label: &str, style: PhoneButton, enabled: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 50.0), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
+    register(ui, format!("button:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    let (fill, text) = match style {
+        PhoneButton::Filled => (t.accent, egui::Color32::WHITE),
+        PhoneButton::Tinted => (t.accent.gamma_multiply(0.18), t.accent),
+        PhoneButton::Destructive => (t.reject.gamma_multiply(0.18), t.reject),
+    };
+    let fade = |c: egui::Color32| if enabled { c } else { c.gamma_multiply(0.4) };
+    let fill = if enabled && resp.is_pointer_button_down_on() { fill.gamma_multiply(0.7) } else { fill };
+    let p = ui.painter();
+    p.rect_filled(r, 12.0, fade(fill));
+    p.text(r.center(), egui::Align2::CENTER_CENTER, label, t.semibold(17.0), fade(text));
+    enabled && resp.clicked()
+}
+
+/// A tick box with its label, the whole row a target (`check:{id}`): a rounded square, filled
+/// with the accent and ticked when on.
+pub(crate) fn tick_box(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let font = t.font(16.0);
+    let galley = ui.painter().layout(label.to_string(), font, t.text, w - 40.0);
+    let h = (galley.size().y + 16.0).max(44.0);
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    register(ui, format!("check:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, *value, label));
+    if resp.clicked() {
+        *value = !*value;
+    }
+    let p = ui.painter();
+    let b = egui::Rect::from_center_size(egui::pos2(r.left() + 12.0, r.center().y), egui::vec2(22.0, 22.0));
+    if *value {
+        p.rect_filled(b, 6.0, t.accent);
+        crate::icons::paint(p, b.shrink(3.0), crate::icons::Icon::Check, egui::Color32::WHITE);
+    } else {
+        p.rect_stroke(b, 6.0, egui::Stroke::new(1.5, t.text_dim), egui::StrokeKind::Inside);
+    }
+    p.galley(egui::pos2(r.left() + 36.0, r.center().y - galley.size().y / 2.0), galley, t.text);
+    resp.clicked()
 }

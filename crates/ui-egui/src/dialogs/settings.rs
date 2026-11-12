@@ -51,7 +51,7 @@ pub(crate) use libraries::{can_switch_library, free_name};
 pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
 use performance::performance_tab;
 use slideshow::slideshow_tab;
-pub(crate) use widgets::{check, choices, heading, hint, row};
+pub(crate) use widgets::{PhoneButton, check, choices, heading, hint, open_subpage, phone_button, phone_slider, row, tick_box};
 
 pub mod slide_layout;
 pub mod slide_overlays;
@@ -148,6 +148,17 @@ pub(crate) fn sheet_header(ui: &mut egui::Ui, title: &str, back: Option<&str>, c
     back
 }
 
+/// A page a section pushed of its own ([`widgets::open_subpage`]): a face model's. False: a list.
+pub(crate) fn own_page(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str) -> bool {
+    match id.strip_prefix("faceModel:") {
+        Some(model) => {
+            super::faces::phone_model_page(app, ui, model);
+            true
+        }
+        None => false,
+    }
+}
+
 /// The header and, on the list, the sections as rows; true while the list is what shows (no page).
 fn phone_sections(ui: &mut egui::Ui, tab: &mut String, tabs: &[(&'static str, &'static str)]) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -236,7 +247,9 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
             egui::ScrollArea::vertical().id_salt(("settings-subpage", page.id.as_str())).max_height(max_height).auto_shrink([false, false]).show(
                 ui,
                 |ui| {
-                    widgets::subpage_list(ui, &page);
+                    if !own_page(app, ui, &page.id) {
+                        widgets::subpage_list(ui, &page);
+                    }
                     register(ui, "settings:subpage", ui.min_rect());
                 },
             );

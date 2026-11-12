@@ -1842,6 +1842,76 @@ fn phone_about_is_a_sheet_like_settings() {
 }
 
 #[test]
+fn phone_culling_is_a_sheet_with_the_systems_sliders() {
+    let mut h = grid_phone();
+    assert!(h.app.run("dialog.cull", json!({})).is_ok());
+    for _ in 0..60 {
+        h.step();
+    }
+    let w = widget(&h, "dialog:window").expect("the sheet");
+    assert!((w.width() - PHONE[0]).abs() < 1.0 && (w.bottom() - PHONE[1]).abs() < 1.0, "a sheet: {w:?}");
+    for id in ["slider:cullReject", "slider:cullGap", "slider:cullSimilar"] {
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
+        assert!(r.width() > PHONE[0] * 0.8, "{id} the width of the sheet: {r:?}");
+    }
+    assert!(widget(&h, "check:cullPick").is_some_and(|r| r.height() >= 44.0), "a switch row");
+    assert!(widget(&h, "button:dialogCancel").is_none() && widget(&h, "button:sheetClose").is_some(), "✕ in place of Cancel");
+    let ok = widget(&h, "button:dialogOk").expect("the confirm");
+    assert!(ok.width() > PHONE[0] * 0.8 && ok.bottom() > PHONE[1] - 120.0, "full width at the foot: {ok:?}");
+    click(&mut h, "button:sheetClose");
+    assert!(h.app.ui.dialog.is_none(), "✕ closes it");
+}
+
+#[test]
+fn phone_face_model_terms_are_a_sheet_that_downloads_once_accepted() {
+    let mut h = grid_phone();
+    let list = h.app.session.execute("faces.models.list", &json!({})).unwrap_or_default();
+    let m = list["models"].as_array().and_then(|a| a.iter().find(|m| m["role"] == "detector").cloned()).expect("the detector");
+    crate::dialogs::faces::open_download_dialog(&mut h.app, &m);
+    for _ in 0..60 {
+        h.step();
+    }
+    let w = widget(&h, "dialog:window").expect("the sheet");
+    assert!((w.width() - PHONE[0]).abs() < 1.0 && (w.bottom() - PHONE[1]).abs() < 1.0, "a sheet: {w:?}");
+    assert!(widget(&h, "faceModel:page").is_some_and(|r| r.height() >= 44.0), "the model's page as a row");
+    let accept = widget(&h, "check:faceModel.accept").expect("the consent switch");
+    assert!(accept.height() >= 44.0, "{accept:?}");
+    assert!(widget(&h, "button:dialogOk").is_some(), "Download at the foot");
+    click(&mut h, "check:faceModel.accept");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::FaceModel { accepted: true, .. })), "accepted");
+}
+
+#[test]
+fn phone_faces_lists_models_as_rows_with_a_page_each() {
+    let dir = std::env::temp_dir().join(format!("lc-phone-faces-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let services = Services { png: None, mobile: true, ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), services), PHONE, 1.0);
+    h.app.session.face_models_dir = Some(dir.join("models"));
+    assert_eq!(h.request("ui.set", json!({"view": "photoGrid", "right": "none"}), T)["ok"], true);
+    h.settle(SETTLE);
+    assert!(h.app.run("app.settings", json!({"tab": "faces"})).is_ok());
+    for _ in 0..60 {
+        h.step();
+    }
+    let row = widget(&h, "faces:model:sface-2021dec").expect("SFace as a row");
+    assert!(row.height() >= 44.0 && row.width() > PHONE[0] * 0.8, "{row:?}");
+    assert!(!any_widget(&h, "faces:download:"), "no buttons in the list");
+    click(&mut h, "faces:model:sface-2021dec");
+    assert!(widget(&h, "button:settingsBack").is_some(), "its page, with ‹");
+    let dl = widget(&h, "button:faces:download:sface-2021dec").expect("Download on its page");
+    assert!(dl.height() >= 44.0 && dl.width() > PHONE[0] * 0.8, "the system's button: {dl:?}");
+    click(&mut h, "button:faces:download:sface-2021dec");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::FaceModel { .. })), "its terms first");
+    for _ in 0..60 {
+        h.step();
+    }
+    let tick = widget(&h, "check:faceModel.accept").expect("the consent");
+    assert!(tick.height() >= 44.0, "{tick:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn phone_interface_is_a_phones_display_settings() {
     let mut h = mobile_settings("interface");
     // Light and Dark as phones side by side, Automatic, then each family as a ticked list
