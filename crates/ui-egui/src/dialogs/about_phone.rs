@@ -105,6 +105,18 @@ pub(crate) fn segmented(ui: &mut egui::Ui, id: &str, options: &[&str], selected:
     changed
 }
 
+/// The system's Back in About: a page goes back to the first. False: on the first already.
+pub(crate) fn back(ctx: &egui::Context) -> bool {
+    let key = egui::Id::unique("about-phone-page");
+    match ctx.data(|d| d.get_temp::<(Page, u64)>(key)) {
+        Some((page, pass)) if page != Page::Main => {
+            ctx.data_mut(|d| d.insert_temp(key, (Page::Main, pass)));
+            true
+        }
+        _ => false,
+    }
+}
+
 /// About's sheet: the header, then the page under it, which scrolls on its own (`body_max`: the
 /// room the sheet has for both).
 pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_max: f32) {

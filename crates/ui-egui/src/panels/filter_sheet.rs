@@ -36,7 +36,7 @@ pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<Page>(sheet_id()).is_some())
 }
 
-fn close(ctx: &egui::Context) {
+pub(crate) fn close(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove_temp::<Page>(sheet_id()));
 }
 

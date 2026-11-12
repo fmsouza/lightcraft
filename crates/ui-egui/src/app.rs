@@ -674,6 +674,7 @@ impl LightcraftApp {
         let content = ui.ctx().content_rect();
         widgets::note_pointer(ui.ctx());
         panels::compact::update(self, &ui.ctx().clone(), content);
+        panels::back::on_back_key(self, &ui.ctx().clone());
         if content != ui.max_rect() {
             ui.painter().rect_filled(ui.max_rect(), 0.0, theme::Tokens::get(ui.ctx()).chrome);
         }

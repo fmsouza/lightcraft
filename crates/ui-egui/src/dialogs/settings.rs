@@ -123,6 +123,23 @@ pub(crate) fn close_requested(ctx: &egui::Context) -> bool {
     ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("settings-phone-close"))).unwrap_or(false)
 }
 
+/// The system's Back in a phone's Settings: a pushed page goes, then a section's page gives way to
+/// the list of sections. False: on the list already (Back closes Settings).
+pub(crate) fn phone_back(ctx: &egui::Context) -> bool {
+    if widgets::subpage(ctx).is_some() {
+        widgets::close_subpage(ctx);
+        return true;
+    }
+    let key = egui::Id::unique("settings-phone-page");
+    match ctx.data(|d| d.get_temp::<(bool, u64)>(key)) {
+        Some((true, pass)) => {
+            ctx.data_mut(|d| d.insert_temp(key, (false, pass)));
+            true
+        }
+        _ => false,
+    }
+}
+
 /// A phone sheet's header: ‹ (`back`: its widget id, `None`: no ‹) at the left, `title` in the
 /// middle, ✕ at the right; true when ‹ is tapped. ✕ asks the sheet to close ([`close_requested`]).
 pub(crate) fn sheet_header(ui: &mut egui::Ui, title: &str, back: Option<&str>, close: &str) -> bool {

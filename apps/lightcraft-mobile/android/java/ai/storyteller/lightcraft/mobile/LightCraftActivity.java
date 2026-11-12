@@ -15,7 +15,19 @@ import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.webkit.MimeTypeMap;
+import android.graphics.Color;
+import android.text.SpannableString;
+import android.text.style.ForegroundColorSpan;
+import android.view.ContextThemeWrapper;
+import android.view.Gravity;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.SubMenu;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.PopupMenu;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import android.view.inputmethod.InputMethodManager;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -258,6 +270,150 @@ public class LightCraftActivity extends NativeActivity {
             saved.clear();
             return b.toString();
         }
+    }
+
+    /** "…"'s popup: where the menu hangs from, the commands its items run, what was picked. */
+    private View menuAnchor;
+    private final List<String> menuActions = new ArrayList<String>();
+    private final List<String> menuPicks = new ArrayList<String>();
+    private boolean menuClosed;
+    private boolean submenuOpening;
+
+    private void wakeQuietly() {
+        try {
+            nativeWake();
+        } catch (Throwable ignored) {
+            // not registered yet: the shell polls anyway
+        }
+    }
+
+    /**
+     * "…" was tapped: the system's popup menu, its right edge under ({@code x}, {@code y}) in
+     * pixels. {@code json}: the items (see {@code native_menu::to_json}): sections become groups
+     * between dividers, submenus open as the system's, picks wait for {@link #takeMenuPicks}.
+     */
+    public void showMenu(final float x, final float y, final String json) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (menuAnchor == null) {
+                        menuAnchor = new View(LightCraftActivity.this);
+                        addContentView(menuAnchor, new ViewGroup.LayoutParams(1, 1));
+                    }
+                    menuAnchor.setX(x - 1);
+                    menuAnchor.setY(y);
+                    // the device's own look for the menu (One UI on a Samsung, light or dark as
+                    // the phone is set): the activity's Theme.Black would draw it as Android 2 did
+                    int theme = Build.VERSION.SDK_INT >= 29
+                            ? android.R.style.Theme_DeviceDefault_DayNight
+                            : android.R.style.Theme_DeviceDefault;
+                    PopupMenu popup = new PopupMenu(new ContextThemeWrapper(LightCraftActivity.this, theme), menuAnchor, Gravity.END);
+                    Menu menu = popup.getMenu();
+                    if (Build.VERSION.SDK_INT >= 28) menu.setGroupDividerEnabled(true);
+                    synchronized (menuPicks) {
+                        menuActions.clear();
+                        menuPicks.clear();
+                        menuClosed = false;
+                    }
+                    addItems(menu, new JSONArray(json), new int[] {0}, 0);
+                    popup.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
+                        @Override
+                        public boolean onMenuItemClick(MenuItem item) {
+                            if (item.hasSubMenu()) {
+                                submenuOpening = true;
+                                return false;
+                            }
+                            int i = item.getItemId() - 1;
+                            synchronized (menuPicks) {
+                                if (i >= 0 && i < menuActions.size()) menuPicks.add(menuActions.get(i));
+                            }
+                            wakeQuietly();
+                            return true;
+                        }
+                    });
+                    popup.setOnDismissListener(new PopupMenu.OnDismissListener() {
+                        @Override
+                        public void onDismiss(PopupMenu m) {
+                            // (the first menu closes as a submenu opens: not the end yet)
+                            if (submenuOpening) {
+                                submenuOpening = false;
+                                return;
+                            }
+                            synchronized (menuPicks) {
+                                menuClosed = true;
+                            }
+                            wakeQuietly();
+                        }
+                    });
+                    popup.show();
+                } catch (Exception e) {
+                    synchronized (menuPicks) {
+                        menuClosed = true;
+                    }
+                    wakeQuietly();
+                }
+            }
+        });
+    }
+
+    /** The items of {@code items} into {@code menu}: actions, sections (a group each), submenus. */
+    private void addItems(Menu menu, JSONArray items, int[] group, int inGroup) throws Exception {
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.getJSONObject(i);
+            String t = it.optString("t");
+            if (t.equals("s")) {
+                group[0]++;
+                addItems(menu, it.getJSONArray("items"), group, group[0]);
+                group[0]++;
+            } else if (t.equals("m")) {
+                SubMenu sub = menu.addSubMenu(inGroup, Menu.NONE, Menu.NONE, it.optString("label"));
+                addItems(sub, it.getJSONArray("items"), group, 0);
+            } else {
+                menuActions.add(it.optString("id") + "\t" + it.optString("params", "{}"));
+                CharSequence label = it.optString("label");
+                if (it.optBoolean("destructive")) {
+                    SpannableString red = new SpannableString(label);
+                    red.setSpan(new ForegroundColorSpan(Color.rgb(0xE5, 0x48, 0x4D)), 0, red.length(), 0);
+                    label = red;
+                }
+                MenuItem m = menu.add(inGroup, menuActions.size(), Menu.NONE, label);
+                m.setEnabled(it.optBoolean("enabled", true));
+                if (it.optBoolean("checked")) {
+                    m.setCheckable(true);
+                    m.setChecked(true);
+                }
+            }
+        }
+    }
+
+    /**
+     * What "…"'s menu picked ("id\tparams" each), an empty array once it closed with no pick, or
+     * null while it's still open with nothing picked.
+     */
+    public String[] takeMenuPicks() {
+        synchronized (menuPicks) {
+            if (menuPicks.isEmpty() && !menuClosed) return null;
+            String[] out = menuPicks.toArray(new String[0]);
+            menuPicks.clear();
+            menuClosed = false;
+            return out;
+        }
+    }
+
+    /** The screen's density now (dpi): it changes with the resolution while the app runs. */
+    public int densityDpi() {
+        return getResources().getConfiguration().densityDpi;
+    }
+
+    /** Back with nowhere to go back to: to the home screen, as the system's own Back does. */
+    public void leave() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                moveTaskToBack(true);
+            }
+        });
     }
 
     private volatile TextInput textInput;

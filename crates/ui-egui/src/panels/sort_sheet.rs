@@ -41,7 +41,7 @@ pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(sheet_id())).unwrap_or(false)
 }
 
-fn close(ctx: &egui::Context) {
+pub(crate) fn close(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<bool>(sheet_id()));
 }
 

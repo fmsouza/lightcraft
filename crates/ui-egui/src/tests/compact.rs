@@ -1912,6 +1912,58 @@ fn phone_faces_lists_models_as_rows_with_a_page_each() {
 }
 
 #[test]
+fn system_back_steps_back_then_says_there_is_nowhere_to_go() {
+    use crate::panels::back::system_back;
+    let mut h = grid_phone();
+    let ctx = h.view.ctx.clone();
+    // a sheet closes
+    click(&mut h, "icon:more");
+    assert!(crate::panels::more_sheet::is_open(&ctx));
+    assert!(system_back(&mut h.app, &ctx));
+    assert!(!crate::panels::more_sheet::is_open(&ctx), "the sheet closed");
+    // Settings: a section's page, then the list, then closed
+    assert!(h.app.run("app.settings", json!({"tab": "general"})).is_ok());
+    for _ in 0..4 {
+        h.step();
+    }
+    click(&mut h, "button:settingsTab-import");
+    assert!(system_back(&mut h.app, &ctx));
+    h.step();
+    assert!(widget(&h, "button:settingsTab-general").is_some(), "back on the list of sections");
+    assert!(system_back(&mut h.app, &ctx));
+    assert!(h.app.ui.dialog.is_none(), "then Settings closes");
+    // the editor goes back to the photos, and the photos have nowhere to go
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    h.step();
+    assert!(system_back(&mut h.app, &ctx));
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+    h.step();
+    assert!(!system_back(&mut h.app, &ctx), "nothing left: the host leaves the app");
+}
+
+#[test]
+fn people_goes_back_to_the_photos_and_the_back_key_steps_back() {
+    let mut h = grid_phone();
+    // ‹ in People's bar (and Esc) went nowhere: People had no step back
+    assert!(h.app.run("view.people", json!({})).is_ok());
+    h.step();
+    assert_eq!(h.app.ui.view, ViewMode::People);
+    assert!(h.app.run("view.back", json!({})).is_ok());
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "People goes back to the photos");
+    // Android's Back reaches the UI as the browser's Back key
+    let back =
+        || egui::Event::Key { key: egui::Key::BrowserBack, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    assert!(h.app.run("view.people", json!({})).is_ok());
+    h.input([back()]);
+    h.step();
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the key steps back too");
+    assert!(!crate::panels::back::take_leave(), "somewhere to go: the app stays");
+    h.input([back()]);
+    h.step();
+    assert!(crate::panels::back::take_leave(), "nowhere left: the host is asked to leave");
+}
+
+#[test]
 fn phone_interface_is_a_phones_display_settings() {
     let mut h = mobile_settings("interface");
     // Light and Dark as phones side by side, Automatic, then each family as a ticked list

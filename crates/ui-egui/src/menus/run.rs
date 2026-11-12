@@ -1519,6 +1519,10 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
             }
             _ => app.ui.view = ViewMode::PhotoGrid,
         }
+    } else if !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+        // People, the map and the other views: back to the photos (‹ in a phone's bar did
+        // nothing there)
+        app.ui.view = ViewMode::PhotoGrid;
     }
     Ok(Value::Null)
 }

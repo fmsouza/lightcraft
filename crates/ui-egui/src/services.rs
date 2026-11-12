@@ -149,6 +149,10 @@ pub struct Services {
     /// The phone's "…" as the system's menu ([`crate::native_menu`]): called at the end of each
     /// frame with where "…" is and what its menu holds, or `None` to take the native button away.
     pub menu_button: Option<Box<dyn FnMut(crate::native_menu::MenuRequest)>>,
+    /// The phone's "…" as the system's popup menu, opened when it is tapped (Android): where "…"
+    /// is (egui points) and what its menu holds; picks come back through
+    /// [`crate::native_menu::pick`].
+    pub open_menu: Option<Box<dyn FnMut(egui::Rect, &[crate::native_menu::NativeItem])>>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
 }

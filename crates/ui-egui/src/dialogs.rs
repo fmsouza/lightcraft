@@ -8,7 +8,7 @@ use crate::state::Dialog;
 use crate::theme::Tokens;
 use lightcraft_engine::export::{ExportOptions, Resize};
 
-mod about_phone;
+pub(crate) mod about_phone;
 mod confirm;
 mod cull;
 mod export;

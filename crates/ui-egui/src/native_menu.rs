@@ -197,6 +197,25 @@ pub fn more_items(app: &LightcraftApp, editor: bool) -> Vec<NativeItem> {
     }
 }
 
+/// `items` as JSON for a host that builds its menu in another language (Android's Java):
+/// `{"t":"a", id, params (JSON text), label, enabled, checked, destructive}`, `{"t":"s", title,
+/// items}` for a section, `{"t":"m", label, items}` for a submenu.
+pub fn to_json(items: &[NativeItem]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|i| match i {
+                NativeItem::Action { id, params, label, enabled, checked, destructive, .. } => json!({
+                    "t": "a", "id": id, "params": params.to_string(), "label": label,
+                    "enabled": enabled, "checked": checked, "destructive": destructive,
+                }),
+                NativeItem::Section { title, items } => json!({"t": "s", "title": title, "items": to_json(items)}),
+                NativeItem::Submenu { label, items, .. } => json!({"t": "m", "label": label, "items": to_json(items)}),
+            })
+            .collect(),
+    )
+}
+
 /// `item` marked as destructive (the system draws it red).
 fn destructive(mut item: NativeItem) -> NativeItem {
     if let NativeItem::Action { destructive, .. } = &mut item {

@@ -206,25 +206,50 @@ fn top_bar(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
         });
 }
 
+/// The system has a Back of its own (Android's button or gesture, see [`super::back`]): the bars
+/// leave out their ‹.
+const SYSTEM_BACK: bool = cfg!(target_os = "android");
+
 /// The right end of a top bar, filled right to left: "…" ([`more_menu`]), then `add`.
 fn bar_right(app: &mut LightcraftApp, ui: &mut egui::Ui, editor: bool, add: impl FnOnce(&mut LightcraftApp, &mut egui::Ui)) {
     let rest = ui.available_rect_before_wrap();
     let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
     right.spacing_mut().item_spacing.x = 0.0;
-    let more = icon_button(&mut right, "more", Icon::Dots, BUTTON, false, true, "More");
+    let more = icon_button(&mut right, "more", more_icon(), BUTTON, false, true, "More");
     if app.services.menu_button.is_some() {
         // the host's own menu: its button over this one takes the tap (see `native_menu`)
         crate::native_menu::place(ui.ctx(), more.rect, editor);
     }
-    more_menu(&more, editor);
+    more_menu(app, &more, editor);
     add(app, &mut right);
 }
 
 /// "…": the More sheet ([`super::more_sheet`]) with what this screen offers
 /// ([`crate::native_menu::more_items`]), as a phone photo editor has it.
-fn more_menu(more: &egui::Response, editor: bool) {
-    if more.clicked() {
-        super::more_sheet::open(&more.ctx, editor);
+fn more_menu(app: &mut LightcraftApp, more: &egui::Response, editor: bool) {
+    if !more.clicked() {
+        return;
+    }
+    // (a host with a popup menu of its own opens that: Android's)
+    if app.services.open_menu.is_some() {
+        let items = crate::native_menu::more_items(app, editor);
+        if let Some(open) = app.services.open_menu.as_mut() {
+            open(more.rect, &items);
+        }
+        return;
+    }
+    super::more_sheet::open(&more.ctx, editor);
+}
+
+/// "…" as each system draws it: three dots in a circle on iOS, stacked on Android, in a row
+/// elsewhere.
+fn more_icon() -> Icon {
+    if cfg!(target_os = "ios") {
+        Icon::DotsCircle
+    } else if cfg!(target_os = "android") {
+        Icon::DotsVertical
+    } else {
+        Icon::Dots
     }
 }
 
@@ -295,7 +320,8 @@ fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if icon_button(ui, "sidebar", Icon::Sidebar, BUTTON, app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
             let _ = app.run("view.leftPanel", json!({}));
         }
-        if app.ui.view != ViewMode::PhotoGrid
+        if !SYSTEM_BACK
+            && app.ui.view != ViewMode::PhotoGrid
             && app.ui.view != ViewMode::SquareGrid
             && icon_button(ui, "back", Icon::Back, BUTTON, false, true, "Back").clicked()
         {
@@ -389,6 +415,17 @@ fn set_search_open(ctx: &egui::Context, open: bool) {
     ctx.data_mut(|d| d.insert_temp(search_open_id(), open));
 }
 
+/// The system's Back while the search takes the bar: as Cancel, the keyboard goes away (the text
+/// stays). False: it wasn't open.
+pub(crate) fn close_search(ctx: &egui::Context) -> bool {
+    if !search_open(ctx) {
+        return false;
+    }
+    set_search_open(ctx, false);
+    ctx.memory_mut(|m| m.surrender_focus(crate::text_field::id("field:search")));
+    true
+}
+
 /// The search field in `r` (same id and command as the desktop top bar's): the magnifier, the text
 /// and, once there is some, ✕ to clear it.
 fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
@@ -453,7 +490,7 @@ fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
 /// Show Original (held down: the photo as shot, let go: the edit).
 fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     top_bar(ui, |ui| {
-        if icon_button(ui, "back", Icon::ChevronLeft, BUTTON, false, true, "Back").clicked() {
+        if !SYSTEM_BACK && icon_button(ui, "back", Icon::ChevronLeft, BUTTON, false, true, "Back").clicked() {
             let _ = app.run("view.back", json!({}));
         }
         bar_right(app, ui, true, |app, right| {

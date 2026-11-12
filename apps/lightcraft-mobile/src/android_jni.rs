@@ -224,6 +224,44 @@ pub fn logcat(level: log::Level, text: &str) {
     }
 }
 
+/// Open "…"'s menu as the system's popup, its right edge under (`x`, `y`) in pixels; `json`:
+/// its items (`native_menu::to_json`).
+pub fn show_menu(app: &AndroidApp, x: f32, y: f32, json: &str) {
+    let r = with_activity(app, |env, activity| {
+        let json = env.new_string(json)?;
+        env.call_method(
+            activity,
+            jni_str!("showMenu"),
+            jni_sig!("(FFLjava/lang/String;)V"),
+            &[JValue::Float(x), JValue::Float(y), JValue::Object(&json)],
+        )?;
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::warn!("menu: {e}");
+    }
+}
+
+/// What the menu picked ("id\tparams" each); `Some(empty)` once it closed without a pick, `None`
+/// while it's open.
+pub fn take_menu_picks(app: &AndroidApp) -> Option<Vec<String>> {
+    take_strings(app, jni_str!("takeMenuPicks"))
+}
+
+/// The screen's density now (dpi), from the activity's configuration (android-activity's copy
+/// isn't refreshed when the resolution changes while the app runs).
+pub fn density_dpi(app: &AndroidApp) -> Option<u32> {
+    let dpi = with_activity(app, |env, activity| env.call_method(activity, jni_str!("densityDpi"), jni_sig!("()I"), &[])?.i());
+    dpi.ok().and_then(|d| u32::try_from(d).ok()).filter(|d| *d > 0)
+}
+
+/// Back with nowhere left to go: the app goes to the background, as the system's Back does.
+pub fn leave(app: &AndroidApp) {
+    if let Err(e) = with_activity(app, |env, activity| env.call_method(activity, jni_str!("leave"), jni_sig!("()V"), &[]).map(|_| ())) {
+        log::warn!("leave: {e}");
+    }
+}
+
 /// Woken (repainted) when the soft keyboard queues edits; see [`register_wake`].
 static WAKE: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
 
