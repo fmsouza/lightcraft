@@ -1100,6 +1100,8 @@ fn touch_cell(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) -> bo
     // the release that ends a long press is not a click (egui drops the potential click once the
     // touch is long), so it needs no guard
     if resp.long_touched() {
+        // (a knock: the photo under the finger is selected, which the finger hides)
+        haptic(app, crate::Haptic::Press);
         if !app.ui.select_mode {
             let _ = app.run("view.selectMode", json!({"on": true}));
             let _ = app.run("library.select", json!({"ids": [id.0], "mode": "replace"}));
@@ -1226,14 +1228,26 @@ fn slide_select(app: &mut LightcraftApp, ui: &egui::Ui, ids: &[PhotoId], cells: 
             if let Some(i) = index_at(pos)
                 && s.last != Some(i)
             {
+                let before = app.session.selection.ids.len();
                 select_range(app, ids, &s, i);
                 s.last = Some(i);
+                // a tick for each photo that went in or out under the finger
+                if app.session.selection.ids.len() != before {
+                    haptic(app, crate::Haptic::Tick);
+                }
             }
             Slide::Selecting(s)
         }
         other => other,
     };
     ctx.data_mut(|d| d.insert_temp(slide_id(), slide));
+}
+
+/// The host's haptics, if it has any.
+fn haptic(app: &mut LightcraftApp, kind: crate::Haptic) {
+    if let Some(h) = app.services.haptic.as_mut() {
+        h(kind);
+    }
 }
 
 /// The cell under `p` (in the grid's content). Cells are in reading order, so their bottoms only

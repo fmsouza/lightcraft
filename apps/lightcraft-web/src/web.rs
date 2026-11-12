@@ -260,6 +260,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         mobile: false,
         menu_button: None,
         open_menu: None,
+        haptic: None,
         import_copies: false,
         // the browser reports prefers-color-scheme to egui
         system_theme: None,

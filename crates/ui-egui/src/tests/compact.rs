@@ -866,6 +866,41 @@ fn long_press_then_slide(h: &mut Headless, from: usize, to: usize) {
 }
 
 #[test]
+fn phone_grid_knocks_for_the_long_press_and_each_photo_a_slide_selects() {
+    let mut h = demo(PHONE, json!({"view": "squareGrid"}));
+    let knocks = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = knocks.clone();
+    h.app.services.haptic = Some(Box::new(move |k| log.borrow_mut().push(k)));
+    touch_screen(&mut h);
+    long_press_then_slide(&mut h, 1, 3);
+    let k = knocks.borrow().clone();
+    assert_eq!(k.first(), Some(&crate::Haptic::Press), "the long press knocks first: {k:?}");
+    let ticks = k.iter().filter(|k| **k == crate::Haptic::Tick).count();
+    // (a tick each time the selection changes under the finger: one step that crosses two photos
+    // is one change)
+    assert!((1..=2).contains(&ticks), "ticks as the slide added photos 2 and 3: {k:?}");
+}
+
+#[test]
+fn select_bar_fits_a_narrow_phone_without_overlaps() {
+    for width in [320.0, 360.0, 402.0] {
+        let mut h = demo([width, 780.0], json!({"view": "squareGrid"}));
+        assert!(h.app.run("view.selectMode", json!({"on": true})).is_ok());
+        assert!(h.app.run("library.selectAll", json!({})).is_ok());
+        for _ in 0..4 {
+            h.step();
+        }
+        let none = widget(&h, "button:selectNone").or_else(|| widget(&h, "icon:selectNone")).expect("Deselect All");
+        for id in ["icon:selectAlbum", "icon:selectRate", "icon:selectDelete", "button:selectDone"] {
+            if let Some(r) = widget(&h, id) {
+                assert!(!r.intersects(none.shrink(1.0)), "{width} pt: Deselect All over {id}: {none:?} {r:?}");
+            }
+        }
+        assert!(none.right() <= width, "{width} pt: on screen: {none:?}");
+    }
+}
+
+#[test]
 fn phone_grid_long_press_then_slide_selects_the_run() {
     let mut h = demo(PHONE, json!({"view": "squareGrid"}));
     touch_screen(&mut h);

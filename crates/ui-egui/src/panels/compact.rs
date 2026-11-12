@@ -599,60 +599,78 @@ fn bar_text_button(ui: &mut egui::Ui, id: &str, label: &str, color: egui::Color3
 }
 
 /// Select mode's bar: how many photos are selected and Deselect All, then Rate, Album, Move to
-/// Folder, Delete, and Done (leaves Select mode). In Recently Deleted, Restore and Delete
+/// Folder, Delete, and Done (leaves Select mode; not on Android, whose Back does). In Recently Deleted, Restore and Delete
 /// Permanently take the place of the others. Share is the top bar's, which shares the selection.
 fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let n = app.session.selection.ids.len();
     let any = n > 0;
     let trash = app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted || crate::menubar::selection_deleted(app);
-    ui.horizontal_centered(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        let count = if any { crate::i18n::tr_format!("{n} selected", n = n) } else { crate::i18n::tr("Select Photos").to_string() };
-        ui.label(egui::RichText::new(count).font(t.semibold(14.0)).color(t.text));
-        ui.add_space(6.0);
-        if any && bar_text_button(ui, "selectNone", "Deselect All", t.accent, true) {
-            let _ = crate::menubar::run_item(app, "library.selectNone", json!({}));
-        }
-        let full = ui.max_rect();
-        let left = ui.cursor().left().max(full.left());
-        let mut right = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(pos2(left, full.top()), full.max))
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        right.spacing_mut().item_spacing.x = 2.0;
+    let full = ui.available_rect_before_wrap();
+    // the buttons first, from the right edge: what they leave is the count's and Deselect All's
+    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(full).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    right.spacing_mut().item_spacing.x = 2.0;
+    select_actions(app, &mut right, any, trash);
+    let room = Rect::from_min_max(full.min, pos2((right.min_rect().left() - 6.0).max(full.left()), full.bottom()));
+    let mut left = ui.new_child(egui::UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    left.spacing_mut().item_spacing.x = 2.0;
+    let count = if any { crate::i18n::tr_format!("{n} selected", n = n) } else { crate::i18n::tr("Select Photos").to_string() };
+    let font = t.semibold(14.0);
+    let width = |s: &str| left.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x;
+    // (with less room, Deselect All is a ✕ after the count; with less still, the count is cut)
+    let deselect = crate::i18n::tr("Deselect All");
+    let words = any && width(&count) + 6.0 + width(deselect) + 16.0 <= room.width();
+    let mark = if any && !words { BUTTON.x } else { 0.0 };
+    let shown = crate::widgets::elide_head(&count, (room.width() - mark - 4.0).max(0.0), width);
+    left.label(egui::RichText::new(shown).font(font.clone()).color(t.text));
+    let none = if words {
+        left.add_space(4.0);
+        bar_text_button(&mut left, "selectNone", "Deselect All", t.accent, true)
+    } else {
+        any && icon_button(&mut left, "selectNone", Icon::Close, BUTTON, false, true, "Deselect All").clicked()
+    };
+    if none {
+        let _ = crate::menubar::run_item(app, "library.selectNone", json!({}));
+    }
+    ui.allocate_rect(full, Sense::hover());
+}
+
+/// Select mode's buttons, right to left: Done (not on Android, whose Back leaves Select mode),
+/// then Delete, Move to Folder, Rate and Add to Album, or in Recently Deleted Restore and Delete
+/// Permanently.
+fn select_actions(app: &mut LightcraftApp, right: &mut egui::Ui, any: bool, trash: bool) {
+    let t = Tokens::get(right.ctx());
+    if !SYSTEM_BACK {
         let done = right.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Done")).font(t.semibold(14.0)).color(t.accent)).frame(false));
-        register(&right, "button:selectDone", done.rect);
+        register(right, "button:selectDone", done.rect);
         if done.clicked() {
             let _ = app.run("view.selectMode", json!({"on": false}));
         }
-        if trash {
-            // the photos are deleted already: put them back, or remove them for good
-            if trash_button(&mut right, any) {
-                let _ = crate::menubar::run_item(app, "photo.deletePermanently", json!({}));
-            }
-            if bar_text_button(&mut right, "selectRestore", "Restore", t.accent, any) {
-                let _ = crate::menubar::run_item(app, "photo.restore", json!({}));
-            }
-            return;
+    }
+    if trash {
+        // the photos are deleted already: put them back, or remove them for good
+        if trash_button(right, any) {
+            let _ = crate::menubar::run_item(app, "photo.deletePermanently", json!({}));
         }
-        if icon_button(&mut right, "selectDelete", Icon::Trash, BUTTON, false, any, "Delete").clicked() {
-            let _ = crate::menubar::run_item(app, "photo.delete", json!({}));
+        if bar_text_button(right, "selectRestore", "Restore", t.accent, any) {
+            let _ = crate::menubar::run_item(app, "photo.restore", json!({}));
         }
-        if crate::panels::grid::can_move_to_folder(app)
-            && icon_button(&mut right, "selectMove", Icon::Folder, BUTTON, false, any, "Move to Folder…").clicked()
-        {
-            crate::panels::grid::move_to_folder(app, right.ctx());
-        }
-        if icon_button(&mut right, "selectRate", Icon::Star, BUTTON, false, any, "Rate").clicked() {
-            super::rate_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
-        }
-        let album = icon_button(&mut right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
-        if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
-            egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
-        }
-    });
+        return;
+    }
+    if icon_button(right, "selectDelete", Icon::Trash, BUTTON, false, any, "Delete").clicked() {
+        let _ = crate::menubar::run_item(app, "photo.delete", json!({}));
+    }
+    if crate::panels::grid::can_move_to_folder(app) && icon_button(right, "selectMove", Icon::Folder, BUTTON, false, any, "Move to Folder…").clicked()
+    {
+        crate::panels::grid::move_to_folder(app, right.ctx());
+    }
+    if icon_button(right, "selectRate", Icon::Star, BUTTON, false, any, "Rate").clicked() {
+        super::rate_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
+    }
+    let album = icon_button(right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
+    if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
+        egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
+    }
 }
 
 /// Delete Permanently: the trash in red (it can be undone, but not from Recently Deleted).

@@ -248,6 +248,19 @@ pub fn take_menu_picks(app: &AndroidApp) -> Option<Vec<String>> {
     take_strings(app, jni_str!("takeMenuPicks"))
 }
 
+/// The system's haptic feedback for `kind` (the view's own, so it follows the phone's settings).
+pub fn haptic(app: &AndroidApp, kind: lightcraft_ui_egui::Haptic) {
+    let code = match kind {
+        lightcraft_ui_egui::Haptic::Press => 0,
+        lightcraft_ui_egui::Haptic::Tick => 1,
+    };
+    if let Err(e) =
+        with_activity(app, |env, activity| env.call_method(activity, jni_str!("haptic"), jni_sig!("(I)V"), &[JValue::Int(code)]).map(|_| ()))
+    {
+        log::warn!("haptic: {e}");
+    }
+}
+
 /// The screen's density now (dpi), from the activity's configuration (android-activity's copy
 /// isn't refreshed when the resolution changes while the app runs).
 pub fn density_dpi(app: &AndroidApp) -> Option<u32> {

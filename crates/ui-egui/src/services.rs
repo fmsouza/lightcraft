@@ -50,6 +50,15 @@ pub type ShareFn = Box<dyn FnMut(&[String])>;
 /// last heard and wakes the UI itself when that changes; it is never polled for changes.
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 
+/// What a [`Services::haptic`] knock means; the host picks the system's feedback for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Haptic {
+    /// A long press took effect (Select mode began with the photo under the finger).
+    Press,
+    /// The selection changed under a sliding finger: a photo went in or out.
+    Tick,
+}
+
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
 pub struct Services {
@@ -153,6 +162,9 @@ pub struct Services {
     /// is (egui points) and what its menu holds; picks come back through
     /// [`crate::native_menu::pick`].
     pub open_menu: Option<Box<dyn FnMut(egui::Rect, &[crate::native_menu::NativeItem])>>,
+    /// The device's haptics: a light knock where a finger's action took effect without much to
+    /// see under it (a long press selecting a photo, a slide adding one).
+    pub haptic: Option<Box<dyn FnMut(Haptic)>>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
 }

@@ -20,6 +20,7 @@ import android.text.SpannableString;
 import android.text.style.ForegroundColorSpan;
 import android.view.ContextThemeWrapper;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.SubMenu;
@@ -399,6 +400,24 @@ public class LightCraftActivity extends NativeActivity {
             menuClosed = false;
             return out;
         }
+    }
+
+    /**
+     * A knock where a finger's action took effect: 0 a long press (the system's long-press
+     * feedback), 1 a selection changing under a slide (a light tick). The window's own view
+     * gives it, so it follows the phone's touch-feedback setting.
+     */
+    public void haptic(final int kind) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                View v = getWindow().getDecorView();
+                int effect = kind == 0
+                        ? HapticFeedbackConstants.LONG_PRESS
+                        : (Build.VERSION.SDK_INT >= 27 ? HapticFeedbackConstants.TEXT_HANDLE_MOVE : HapticFeedbackConstants.CLOCK_TICK);
+                v.performHapticFeedback(effect);
+            }
+        });
     }
 
     /** The screen's density now (dpi): it changes with the resolution while the app runs. */

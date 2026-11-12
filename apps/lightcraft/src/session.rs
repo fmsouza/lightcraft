@@ -250,6 +250,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         mobile: false,
         menu_button: None,
         open_menu: None,
+        haptic: None,
         import_copies: false,
         system_theme: appearance::service(),
     }

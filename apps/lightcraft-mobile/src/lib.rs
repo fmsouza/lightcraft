@@ -22,6 +22,8 @@ mod ios_files;
 #[cfg(target_os = "ios")]
 mod ios_fonts;
 #[cfg(target_os = "ios")]
+mod ios_haptics;
+#[cfg(target_os = "ios")]
 mod ios_keys;
 #[cfg(target_os = "ios")]
 mod ios_menu;
@@ -532,6 +534,15 @@ fn services(export_dir: String, ctx: &egui::Context) -> Services {
         menu_button: Some(Box::new({
             let ctx = ctx.clone();
             move |request| ios_menu::update(request, &ctx)
+        })),
+        // a knock where a finger's action took effect (a long press, a slide selecting)
+        #[cfg(target_os = "ios")]
+        haptic: Some(Box::new(ios_haptics::knock)),
+        #[cfg(target_os = "android")]
+        haptic: Some(Box::new(|kind| {
+            if let Some(activity) = ANDROID_APP.get() {
+                android_jni::haptic(activity, kind);
+            }
         })),
         // tapping "…" opens the system's popup menu under it
         #[cfg(target_os = "android")]
