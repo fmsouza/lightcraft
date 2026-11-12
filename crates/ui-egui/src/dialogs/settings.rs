@@ -118,9 +118,34 @@ pub(crate) fn portrait_phone(ctx: &egui::Context) -> bool {
     crate::panels::compact::is_compact(ctx) && ctx.content_rect().width() < crate::panels::compact::COMPACT_WIDTH
 }
 
-/// Set for a frame when the header's ✕ is tapped; the dialog takes it and closes.
+/// Set for a frame when a sheet header's ✕ is tapped; the dialog takes it and closes.
 pub(crate) fn close_requested(ctx: &egui::Context) -> bool {
     ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("settings-phone-close"))).unwrap_or(false)
+}
+
+/// A phone sheet's header: ‹ (`back`: its widget id, `None`: no ‹) at the left, `title` in the
+/// middle, ✕ at the right; true when ‹ is tapped. ✕ asks the sheet to close ([`close_requested`]).
+pub(crate) fn sheet_header(ui: &mut egui::Ui, title: &str, back: Option<&str>, close: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let (bar, _) = ui.allocate_exact_size(egui::vec2(w, 48.0), egui::Sense::hover());
+    let icon_button = |ui: &mut egui::Ui, id: &str, x: f32, icon: crate::icons::Icon, label: &str| -> bool {
+        let r = egui::Rect::from_center_size(egui::pos2(x, bar.center().y), egui::vec2(44.0, 44.0));
+        let resp = ui.interact(r, egui::Id::unique(id), egui::Sense::click());
+        register(ui, id, r);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        if resp.is_pointer_button_down_on() {
+            ui.painter().circle_filled(r.center(), 20.0, t.hover);
+        }
+        crate::icons::paint(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(20.0, 20.0)), icon, t.text);
+        resp.clicked()
+    };
+    ui.painter().text(bar.center(), egui::Align2::CENTER_CENTER, title, t.semibold(17.0), t.text);
+    let back = back.is_some_and(|id| icon_button(ui, id, bar.left() + 18.0, crate::icons::Icon::ChevronLeft, crate::i18n::tr("Back")));
+    if icon_button(ui, close, bar.right() - 18.0, crate::icons::Icon::Close, crate::i18n::tr("Close")) {
+        ui.data_mut(|d| d.insert_temp(egui::Id::unique("settings-phone-close"), true));
+    }
+    back
 }
 
 /// The header and, on the list, the sections as rows; true while the list is what shows (no page).
@@ -136,28 +161,13 @@ fn phone_sections(ui: &mut egui::Ui, tab: &mut String, tabs: &[(&'static str, &'
         widgets::close_subpage(ui.ctx());
     }
     let sub = widgets::subpage(ui.ctx());
-    // the header: ‹ on a page, its name (or Settings) in the middle, ✕ at the right
-    let w = ui.available_width();
-    let (bar, _) = ui.allocate_exact_size(egui::vec2(w, 48.0), egui::Sense::hover());
-    let icon_button = |ui: &mut egui::Ui, id: &str, x: f32, icon: crate::icons::Icon, label: &str| -> bool {
-        let r = egui::Rect::from_center_size(egui::pos2(x, bar.center().y), egui::vec2(44.0, 44.0));
-        let resp = ui.interact(r, egui::Id::unique(id), egui::Sense::click());
-        register(ui, id, r);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-        if resp.is_pointer_button_down_on() {
-            ui.painter().circle_filled(r.center(), 20.0, t.hover);
-        }
-        crate::icons::paint(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(20.0, 20.0)), icon, t.text);
-        resp.clicked()
-    };
     // (a list a row opened is a page under the section's: its name, ‹ back to the section)
     let title = match &sub {
-        Some(page) if open => page.title.as_str(),
-        _ => tabs.iter().find(|(id, _)| open && id == tab).map_or(crate::i18n::tr("Settings"), |(_, label)| crate::i18n::tr(label)),
+        Some(page) if open => page.title.clone(),
+        _ => tabs.iter().find(|(id, _)| open && id == tab).map_or(crate::i18n::tr("Settings"), |(_, label)| crate::i18n::tr(label)).to_string(),
     };
-    ui.painter().text(bar.center(), egui::Align2::CENTER_CENTER, title, t.semibold(17.0), t.text);
     let mut list = !open;
-    if open && icon_button(ui, "button:settingsBack", bar.left() + 18.0, crate::icons::Icon::ChevronLeft, crate::i18n::tr("Back")) {
+    if sheet_header(ui, &title, open.then_some("button:settingsBack"), "button:settingsClose") {
         if sub.is_some() {
             widgets::close_subpage(ui.ctx());
         } else {
@@ -165,9 +175,7 @@ fn phone_sections(ui: &mut egui::Ui, tab: &mut String, tabs: &[(&'static str, &'
             list = true;
         }
     }
-    if icon_button(ui, "button:settingsClose", bar.right() - 18.0, crate::icons::Icon::Close, crate::i18n::tr("Close")) {
-        ui.data_mut(|d| d.insert_temp(egui::Id::unique("settings-phone-close"), true));
-    }
+    let w = ui.available_width();
     if list {
         ui.separator();
         for (id, label) in tabs {

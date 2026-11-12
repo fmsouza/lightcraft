@@ -1801,6 +1801,31 @@ fn phone_settings_is_a_sheet_from_the_bottom_edge() {
 }
 
 #[test]
+fn phone_about_is_a_sheet_like_settings() {
+    let mut h = grid_phone();
+    assert!(h.app.run("app.about", json!({})).is_ok());
+    // (past its slide up: headless time moves a frame at a time)
+    for _ in 0..60 {
+        h.step();
+    }
+    let w = widget(&h, "dialog:window").expect("the About window");
+    assert!((w.width() - PHONE[0]).abs() < 1.0, "the width of the screen: {w:?}");
+    assert!((w.bottom() - PHONE[1]).abs() < 1.0, "down to the bottom edge: {w:?}");
+    assert!(widget(&h, "button:aboutTab-contributors").is_none(), "no desktop tabs");
+    assert!(widget(&h, "button:dialogOk").is_none(), "no Close button at the bottom");
+    assert!(widget(&h, "button:aboutBack").is_none(), "no ‹ on its first page");
+    // Contributors is a page, ‹ comes back
+    let row = widget(&h, "about:contributors").expect("Contributors as a row");
+    assert!(row.height() >= 44.0 && row.width() > PHONE[0] * 0.8, "{row:?}");
+    click(&mut h, "about:contributors");
+    assert!(widget(&h, "about:contributors").is_none() && widget(&h, "button:aboutBack").is_some(), "Contributors' page");
+    click(&mut h, "button:aboutBack");
+    assert!(widget(&h, "about:contributors").is_some(), "back on the first page");
+    click(&mut h, "button:aboutClose");
+    assert!(h.app.ui.dialog.is_none(), "✕ closes it");
+}
+
+#[test]
 fn phone_interface_is_a_phones_display_settings() {
     let mut h = mobile_settings("interface");
     // Light and Dark as phones side by side, Automatic, then each family as a ticked list

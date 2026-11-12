@@ -115,8 +115,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         confirm = true;
     }
     let title = dialog_title(app, &dlg);
-    // (upright on a phone, Settings is a sheet up from the bottom edge with a header of its own)
-    let phone_settings = matches!(dlg, Dialog::Settings { .. }) && crate::panels::settings::portrait_phone(ctx);
+    // (upright on a phone, Settings and About are sheets up from the bottom edge with a header of their own)
+    let phone_settings = matches!(dlg, Dialog::Settings { .. } | Dialog::About) && crate::panels::settings::portrait_phone(ctx);
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
     // The import review takes most of the screen (its photo grid and options column scroll on
     // their own) and can be resized on the desktop; it keeps a window id of its own so the size
@@ -191,7 +191,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             dialog_content(app, ui, &t, body_max, &mut confirm, &mut import_pressed, &mut dlg)
         });
         // (the import review draws its own buttons, beside or under its photos; a phone's
-        // Settings closes with its header's ✕)
+        // Settings or About closes with its header's ✕)
         if import || phone_settings {
             content_w = ui.min_rect().width();
             return;
@@ -273,7 +273,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
 /// The band of the top bar that doubles as the window's title bar, as drawn last frame: `None`
 /// without the integrated title bar (Windows, Linux, the web), in macOS full screen, and while the
 /// bar isn't on screen (the full-screen photo view).
-/// Upright on a phone, Settings is a sheet the width of the screen that slides up from the bottom
+/// Upright on a phone, Settings (and About) is a sheet the width of the screen that slides up from the bottom
 /// edge and stays, with a header of its own (‹, the page's name, ✕) in place of a title bar.
 fn settings_sheet<'a>(ctx: &egui::Context, title: &str, id: egui::Id) -> egui::Window<'a> {
     let window = egui::Window::new(crate::i18n::tr(title))
@@ -1921,6 +1921,10 @@ fn remove_folder_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 /// The body of the About dialog.
 fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::About = dlg else { return };
+    if crate::panels::settings::portrait_phone(ui.ctx()) {
+        phone_about(app, ui, t);
+        return;
+    }
     // (the phone's width on a phone, as Settings does)
     ui.set_min_width(crate::panels::compact::dialog_width(ui.ctx(), 680.0, 16.0));
     let tab_id = egui::Id::unique("about_tab");
@@ -1971,6 +1975,77 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
             crate::panels::compact::about_help_rows(app, ui);
         }
     }
+}
+
+/// About on an upright phone, as its Settings: a header (‹, the page's name, ✕), the app's name
+/// and licence, Contributors and Models as pages, the Help menu's rows, the links as rows.
+fn phone_about(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    ui.set_width(ui.available_width());
+    let key = egui::Id::unique("about-phone-page");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let (mut page, last) = ui.data(|d| d.get_temp::<(u8, u64)>(key)).unwrap_or((0, 0));
+    // (shown again: it starts on its first page)
+    if last + 1 < pass {
+        page = 0;
+    }
+    let title = match page {
+        1 => "Contributors",
+        2 => "Models",
+        _ => "About LightCraft",
+    };
+    if crate::panels::settings::sheet_header(ui, crate::i18n::tr(title), (page != 0).then_some("button:aboutBack"), "button:aboutClose") {
+        page = 0;
+    }
+    ui.separator();
+    match page {
+        1 => crate::credits::contributors_ui(app, ui),
+        2 => crate::credits::models_ui(ui),
+        _ => {
+            ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new("LightCraft").font(t.semibold(22.0)).color(t.text));
+                ui.label(egui::RichText::new(crate::i18n::tr_format!("Version {}", env!("CARGO_PKG_VERSION"))).font(t.font(15.0)).color(t.text_dim));
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr("A clean-room, pure-Rust photo library and raw developer."))
+                        .font(t.font(14.0))
+                        .color(t.text_dim),
+                );
+            });
+            ui.add_space(8.0);
+            for (i, id, label) in [(1, "about:contributors", "Contributors"), (2, "about:models", "Models")] {
+                if crate::panels::more_sheet::row(ui, id.into(), crate::i18n::tr(label), true, None, true, false) {
+                    page = i;
+                }
+            }
+            ui.separator();
+            crate::panels::compact::about_help_rows(app, ui);
+            ui.separator();
+            for (id, label, url) in [
+                ("about:website", "LightCraft website", crate::links::APP_PAGE),
+                ("about:github", "Source code on GitHub", crate::links::GITHUB),
+                ("about:artcraft", "ArtCraft — more creative apps", crate::links::WEBSITE),
+            ] {
+                if crate::panels::more_sheet::row(ui, id.into(), crate::i18n::tr(label), true, None, false, false) {
+                    let _ = crate::links::open(app, url);
+                }
+            }
+            ui.add_space(12.0);
+            let w = ui.available_width();
+            let r = crate::button::Button::new("Join the ArtCraft Discord").primary().large().min_width(w).widget("button:aboutDiscord").show(ui);
+            if r.clicked() {
+                let _ = crate::links::open(app, crate::links::DISCORD);
+            }
+            ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
+                let credits = crate::i18n::tr_format!(
+                    "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
+                    crate::theme::font_credits(app.chinese_font.is_some())
+                );
+                ui.label(egui::RichText::new(credits).font(t.font(13.0)).color(t.text_dim));
+            });
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(key, (page, pass)));
 }
 
 /// The body of the open dialog: what each kind of dialog shows between its title and its buttons. `confirm` is set
