@@ -529,6 +529,24 @@ fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// A long press on the photo in the editor: the photo as shot until the finger lifts (the view it
+/// replaced comes back then), as the Show Original button does.
+pub(crate) fn hold_original_on_photo(app: &mut LightcraftApp, resp: &egui::Response) {
+    let key = egui::Id::unique("compact-hold-photo-original");
+    let was: Option<crate::state::BeforeAfter> = resp.ctx.data(|d| d.get_temp(key));
+    match was {
+        None if resp.long_touched() => {
+            resp.ctx.data_mut(|d| d.insert_temp(key, app.ui.before_after));
+            app.ui.before_after = crate::state::BeforeAfter::Original;
+        }
+        Some(before) if !resp.ctx.input(|i| i.pointer.any_down() || i.any_touches()) => {
+            resp.ctx.data_mut(|d| d.remove::<crate::state::BeforeAfter>(key));
+            app.ui.before_after = before;
+        }
+        _ => {}
+    }
+}
+
 /// Show Original held down: the press shows the photo as shot, and the release brings back the
 /// view it replaced. Only the press and release change the view, so View > Show Original and the
 /// Before / After layouts work as usual otherwise. The hold is followed until the pointer lifts,

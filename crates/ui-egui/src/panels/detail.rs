@@ -389,8 +389,14 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
     crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::cell_description(app, photo)));
 }
 
-/// The loupe's right-click menu: zoom commands and the grid's photo menu.
+/// The loupe's right-click menu: zoom commands and the grid's photo menu. A phone has none: a long
+/// press shows the photo as shot while the finger stays, as its photo editors do (its commands are
+/// "…"'s, not a second menu of the same under the finger).
 fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) {
+    if crate::panels::compact::is_compact(&resp.ctx) && crate::widgets::touch_screen(&resp.ctx) {
+        crate::panels::compact::hold_original_on_photo(app, resp);
+        return;
+    }
     crate::widgets::context_menu(resp, |ui| {
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {

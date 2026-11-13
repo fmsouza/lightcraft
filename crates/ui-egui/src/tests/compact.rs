@@ -2297,3 +2297,17 @@ fn phone_crop_is_chips_and_round_tools() {
     click(&mut h, "button:cropFlipH");
     assert!(flipped(&h), "Flip H flips");
 }
+
+#[test]
+fn phone_long_press_on_the_photo_shows_the_original_not_a_menu() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    touch_screen(&mut h);
+    let photo = h.app.canvas_rect.expect("the photo's room").center();
+    let before = h.app.ui.before_after;
+    hold(&mut h, photo, 60, |h| {
+        assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::Original, "the photo as shot while held");
+        assert!(widget(h, "panel:contextSheet").is_none(), "no menu under the finger");
+    });
+    assert_eq!(h.app.ui.before_after, before, "back once the finger lifts");
+    assert!(widget(&h, "panel:contextSheet").is_none());
+}
