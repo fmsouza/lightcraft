@@ -1068,13 +1068,21 @@ pub fn dialog<'a>(ctx: &egui::Context, win: egui::Window<'a>) -> egui::Window<'a
 pub fn sheet_rect(ctx: &egui::Context) -> Rect {
     let screen = ctx.viewport_rect();
     let safe = ctx.content_rect();
-    Rect::from_min_max(egui::pos2(screen.left(), safe.top() + 8.0), screen.max)
+    // the soft keyboard up: the sheet ends on it, so its fields and confirm stay in view
+    let bottom = if keyboard_up(ctx) { safe.bottom() } else { screen.bottom() };
+    Rect::from_min_max(egui::pos2(screen.left(), safe.top() + 8.0), egui::pos2(screen.right(), bottom))
+}
+
+/// The soft keyboard takes the bottom of the screen: far more than a home indicator's inset.
+fn keyboard_up(ctx: &egui::Context) -> bool {
+    ctx.viewport_rect().bottom() - ctx.content_rect().bottom() > 80.0
 }
 
 /// A full sheet's frame: rounded at the top, square where it meets the bottom edge, its content
 /// clear of the home indicator.
 pub fn sheet_frame(ctx: &egui::Context) -> egui::Frame {
-    let inset = (ctx.viewport_rect().bottom() - ctx.content_rect().bottom()).max(0.0);
+    // (the home indicator's inset; with the keyboard up the sheet ends on the keyboard instead)
+    let inset = if keyboard_up(ctx) { 0.0 } else { (ctx.viewport_rect().bottom() - ctx.content_rect().bottom()).max(0.0) };
     egui::Frame::window(&ctx.global_style()).corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 }).inner_margin(egui::Margin {
         left: 16,
         right: 16,

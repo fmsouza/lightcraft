@@ -122,8 +122,8 @@ fn phone_width_dialogs_fit_the_screen() {
     for command in ["app.settings", "dialog.export", "app.shortcuts", "dialog.mergeHdr", "dialog.labelNames", "dialog.copySettings"] {
         open(&mut h, command);
         assert!(h.app.ui.dialog.is_some(), "{command} opened a dialog");
-        // (Settings and Copy Settings are sheets that slide up: measured once in place)
-        for _ in 0..if matches!(command, "app.settings" | "dialog.copySettings") { 60 } else { 0 } {
+        // (most are sheets that slide up on a phone: measured once in place)
+        for _ in 0..60 {
             h.step();
         }
         let r = dialog_rect(&h).unwrap_or_else(|| panic!("{command}: no dialog window"));

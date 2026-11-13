@@ -192,7 +192,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             ui.separator();
             // the confirm pinned to the sheet's foot, the body scrolling in the room above it
             let foot = ui.max_rect().bottom();
-            let room = (foot - SHEET_FOOTER_H - ui.cursor().top()).max(DIALOG_MIN_BODY);
+            let footer_h = if matches!(dlg, Dialog::ViewOptions) { 0.0 } else { SHEET_FOOTER_H };
+            let room = (foot - footer_h - ui.cursor().top()).max(DIALOG_MIN_BODY);
             body_h = dialog_body(ui, Some(title.as_str()), room, |ui| dialog_content(app, ui, &t, room, &mut confirm, &mut import_pressed, &mut dlg));
             let at = egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), foot - SHEET_BUTTON_H), egui::pos2(ui.max_rect().right(), foot));
             ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| footer(app, ui, &dlg, &mut close, &mut confirm));
@@ -604,14 +605,23 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     }
 }
 
-/// Upright on a phone, Settings, About, Assisted Culling, a face model's terms, Copy / Paste
-/// Settings and Create Preset are sheets up from the bottom edge with a header of their own: (a
-/// sheet, with its confirm at its foot (all but Settings and About)).
+/// Upright on a phone, Settings, About, View Options and the dialogs that act on photos or edits
+/// (Assisted Culling, a face model's terms, Copy / Paste Settings, Create Preset, Rename, Export,
+/// Color Label names) are sheets up from the bottom edge with a header of their own: (a sheet,
+/// with its header's ✕ and, for those that act, their confirm at its foot).
 fn phone_sheet(ctx: &egui::Context, dlg: &Dialog) -> (bool, bool) {
     // (with their confirm at the foot: those that act)
     let acts = matches!(
         dlg,
-        Dialog::Cull { .. } | Dialog::FaceModel { .. } | Dialog::CopySettings { .. } | Dialog::PasteSettings { .. } | Dialog::CreatePreset { .. }
+        Dialog::Cull { .. }
+            | Dialog::FaceModel { .. }
+            | Dialog::CopySettings { .. }
+            | Dialog::PasteSettings { .. }
+            | Dialog::CreatePreset { .. }
+            | Dialog::Rename { .. }
+            | Dialog::Export { .. }
+            | Dialog::LabelNames { .. }
+            | Dialog::ViewOptions
     );
     let sheet = (acts || matches!(dlg, Dialog::Settings { .. } | Dialog::About)) && crate::panels::settings::portrait_phone(ctx);
     (sheet, sheet && acts)
@@ -626,6 +636,10 @@ const SHEET_BUTTON_H: f32 = 50.0;
 /// A phone sheet's confirm, the width of the sheet at its foot (its ✕ is the cancel).
 fn footer(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
     let informational = is_informational(dlg);
+    // (a sheet that only shows options closes with its ✕: no Close at its foot too)
+    if matches!(dlg, Dialog::ViewOptions) {
+        return;
+    }
     let ok = match dlg {
         // ("Cull 24 Photos": what it acts on, said once more where the finger goes)
         Dialog::Cull { .. } => {
@@ -869,7 +883,7 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
         }))
         .color(t.text_dim),
     );
-    let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
+    let r = crate::widgets::checkbox(ui, pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
     crate::widgets::register(ui, "check:cullPick", r.rect);
     ui.add_space(6.0);
     // the sliders drag over the usual range; their value fields take whatever
@@ -1270,7 +1284,7 @@ fn rename_person_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, co
             ))
             .color(t.caution),
         );
-        let r = ui.checkbox(merge, crate::i18n::tr("Combine with the existing person"));
+        let r = crate::widgets::checkbox(ui, merge, crate::i18n::tr("Combine with the existing person"));
         crate::widgets::register(ui, "check:personMerge", r.rect);
     }
 }
@@ -1330,7 +1344,7 @@ fn new_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, confirm: &mut bool
     // as in Lightroom, the option is only there when something is selected
     if !*folder && !app.session.selected().is_empty() {
         ui.add_space(6.0);
-        let r = ui.checkbox(include_selected, crate::i18n::tr("Include selected photos"));
+        let r = crate::widgets::checkbox(ui, include_selected, crate::i18n::tr("Include selected photos"));
         crate::widgets::register(ui, "check:albumIncludeSelected", r.rect);
     }
 }
@@ -1365,14 +1379,14 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
         });
         crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
     });
-    ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
+    crate::widgets::checkbox(ui, &mut options.landscape, crate::i18n::tr("Landscape"));
     field(ui, "Columns", |ui| {
         ui.add(egui::DragValue::new(&mut options.columns).range(1..=8));
     });
     field(ui, "Rows", |ui| {
         ui.add(egui::DragValue::new(&mut options.rows).range(1..=10));
     });
-    ui.checkbox(&mut options.captions, crate::i18n::tr("Filename captions"));
+    crate::widgets::checkbox(ui, &mut options.captions, crate::i18n::tr("Filename captions"));
     ui.label(crate::i18n::tr("150 dpi · sRGB · current edits · fit without cropping"));
     ui.label(crate::i18n::tr("Choose a PDF destination after confirming. Print the PDF from your viewer."));
 }
@@ -1503,7 +1517,7 @@ fn export_color_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
         let tip = crate::i18n::tr(
             "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float",
         );
-        ui.checkbox(&mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
+        crate::widgets::checkbox(ui, &mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
         if opts.hdr && !opts.hdr_output() {
             ui.label(egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
         }
@@ -1548,7 +1562,7 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
     use lightcraft_engine::export::ExportFormat as F;
     if opts.format == F::Jxl {
         let tip = "Mathematically lossless: every pixel is kept exactly (larger files)";
-        ui.checkbox(&mut opts.jxl_lossless, crate::i18n::tr("Lossless")).on_hover_text(crate::i18n::tr(tip));
+        crate::widgets::checkbox(ui, &mut opts.jxl_lossless, crate::i18n::tr("Lossless")).on_hover_text(crate::i18n::tr(tip));
     }
     if matches!(opts.format, F::Jpeg | F::Avif) || (opts.format == F::Jxl && !opts.jxl_lossless) {
         let mut q = opts.quality as f64;
@@ -1560,7 +1574,7 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
         use lightcraft_engine::export::JxlEffort as E;
         choices(ui, "Effort", "exportJxlEffort", &[(E::Fast, "Fast"), (E::Normal, "Normal")], &mut opts.jxl_effort);
         let tip = "Shows a coarse version first and refines it as the file loads";
-        ui.checkbox(&mut opts.jxl_progressive, crate::i18n::tr("Progressive")).on_hover_text(crate::i18n::tr(tip));
+        crate::widgets::checkbox(ui, &mut opts.jxl_progressive, crate::i18n::tr("Progressive")).on_hover_text(crate::i18n::tr(tip));
     }
     if opts.format == F::Jpeg {
         let mut k = *limit_kb as f64;
@@ -1591,7 +1605,7 @@ fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Exp
         &mut opts.metadata,
     );
     if !matches!(opts.metadata, M::None | M::Copyright) {
-        ui.checkbox(&mut opts.remove_location, crate::i18n::tr("Remove location info"));
+        crate::widgets::checkbox(ui, &mut opts.remove_location, crate::i18n::tr("Remove location info"));
     }
     export_watermark(app, ui, opts, full_size, resize);
 }
@@ -1599,7 +1613,7 @@ fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Exp
 /// Export dialog: the watermark switch, its preview and its settings.
 fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions, full_size: bool, resize: Resize) {
     let mut wm_on = opts.watermark.is_some();
-    if ui.checkbox(&mut wm_on, crate::i18n::tr("Watermark")).changed() {
+    if crate::widgets::checkbox(ui, &mut wm_on, crate::i18n::tr("Watermark")).changed() {
         opts.watermark = wm_on.then(|| lightcraft_engine::export::Watermark { text: "© ".into(), ..Default::default() });
     }
     let wm_shown = opts.watermark.clone();
@@ -1681,7 +1695,7 @@ fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Expor
             wm.inset_y = (v / 100.0) as f32;
         }
         if !graphic {
-            ui.checkbox(&mut wm.shadow, crate::i18n::tr("Shadow"));
+            crate::widgets::checkbox(ui, &mut wm.shadow, crate::i18n::tr("Shadow"));
         }
     }
     if opts.watermark != wm_shown {
@@ -1782,7 +1796,7 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
 /// Export dialog, after export: Apple Photos imports the files written (macOS only).
 #[cfg(target_os = "macos")]
 fn export_apple_photos_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
-    let r = ui.checkbox(&mut opts.add_to_photos, crate::i18n::tr("Add to Apple Photos"));
+    let r = crate::widgets::checkbox(ui, &mut opts.add_to_photos, crate::i18n::tr("Add to Apple Photos"));
     crate::widgets::register(ui, "exportAddToPhotos", r.rect);
     if opts.add_to_photos {
         field(ui, "Album", |ui| {
@@ -1879,7 +1893,7 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     ui.add_space(6.0);
     if editing.is_none() {
         if let Some(p) = parent {
-            let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
+            let r = crate::widgets::checkbox(ui, inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
             crate::widgets::register(ui, "check:keywordInside", r.rect);
         }
         let n = app.session.selection.ids.len();
@@ -1894,7 +1908,7 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
         (export_synonyms, "Export Synonyms", "check:keywordExportSynonyms"),
         (person, "Person", "check:keywordPerson"),
     ] {
-        let r = ui.checkbox(on, crate::i18n::tr(label));
+        let r = crate::widgets::checkbox(ui, on, crate::i18n::tr(label));
         crate::widgets::register(ui, id, r.rect);
     }
 }
@@ -1931,7 +1945,7 @@ fn keyword_set_body(ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut
     });
     if replaces.is_some() {
         ui.add_space(6.0);
-        let r = ui.checkbox(as_new, crate::i18n::tr("Save as a new set"));
+        let r = crate::widgets::checkbox(ui, as_new, crate::i18n::tr("Save as a new set"));
         crate::widgets::register(ui, "check:keywordSetAsNew", r.rect);
     }
     // Return in any field saves the set
@@ -1990,7 +2004,7 @@ fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);
-    let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));
+    let c = crate::widgets::checkbox(ui, dont_ask, crate::i18n::tr("Don't ask again"));
     crate::widgets::register(ui, "check:moveDontAsk", c.rect);
     c.on_hover_text(crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on"));
 }

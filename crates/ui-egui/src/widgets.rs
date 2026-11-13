@@ -1303,6 +1303,39 @@ fn phone_segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option
     clicked
 }
 
+/// A check box, or where controls are finger-sized (a phone's sheets) the system's switch row:
+/// the label on the left, the switch at the right edge, the whole row a target. As
+/// [`Ui::checkbox`], the response says when it changed.
+pub(crate) fn checkbox(ui: &mut Ui, value: &mut bool, label: impl AsRef<str>) -> Response {
+    let label = label.as_ref();
+    if !finger_ui(ui) {
+        return ui.checkbox(value, label);
+    }
+    const SWITCH: egui::Vec2 = vec2(50.0, 30.0);
+    let t = Tokens::get(ui.ctx());
+    // (inside what's shown: a scrolling sheet's room can reach under its clipped edge)
+    let w = ui.available_width().min(ui.clip_rect().right() - ui.cursor().left() - 2.0).max(SWITCH.x + 40.0);
+    let galley = ui.painter().layout(label.to_string(), t.font(16.0), t.text, (w - SWITCH.x - 16.0).max(40.0));
+    let h = (galley.size().y + 12.0).max(44.0);
+    let (r, mut resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
+    if resp.clicked() && ui.is_enabled() {
+        *value = !*value;
+        resp.mark_changed();
+    }
+    let on = *value;
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, label));
+    let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.4) };
+    let p = ui.painter();
+    p.galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, fade(t.text));
+    let how_on = ui.ctx().animate_bool_responsive(resp.id, on);
+    let track = Rect::from_center_size(pos2(r.right() - SWITCH.x / 2.0, r.center().y), SWITCH);
+    p.rect_filled(track, SWITCH.y / 2.0, fade(lerp(t.text_dim.gamma_multiply(0.35), t.accent, how_on)));
+    let knob_x = egui::lerp((track.left() + SWITCH.y / 2.0)..=(track.right() - SWITCH.y / 2.0), how_on);
+    p.circle_filled(pos2(knob_x, track.center().y), SWITCH.y / 2.0 - 3.0, fade(Color32::WHITE));
+    resp
+}
+
 /// A phone's row of choices as pills that scroll sideways when they don't fit (an aspect ratio,
 /// a filter): the chosen one filled with the accent (`button:{id}-{key}`). Returns the index tapped.
 pub(crate) fn chip_row(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>) -> Option<usize> {
