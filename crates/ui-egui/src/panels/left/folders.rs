@@ -173,7 +173,9 @@ pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Al
         }
         if !a.folder && !a.is_smart() {
             let is_target = app.session.target_album == Some(a.id) || (app.session.target_album.is_none() && a.quick);
-            if !is_target && ui.button(crate::i18n::tr("Set as Target Album (B adds to it)")).clicked() {
+            // (the B key named only where there's a keyboard)
+            let target = if crate::widgets::touch_screen(ui.ctx()) { "Set as Target Album" } else { "Set as Target Album (B adds to it)" };
+            if !is_target && ui.button(crate::i18n::tr(target)).clicked() {
                 let _ = app.run("album.setTarget", json!({"id": if a.quick { serde_json::Value::Null } else { json!(a.id.0) }}));
             }
             if is_target && !a.quick && ui.button(crate::i18n::tr("Stop Using as Target Album")).clicked() {

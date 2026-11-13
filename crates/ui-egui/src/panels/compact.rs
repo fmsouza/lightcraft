@@ -830,6 +830,14 @@ fn press(app: &mut LightcraftApp, ctx: &egui::Context, tab: Tab) {
     }
 }
 
+/// Press the tool row's tab `id` (`icon:{id}`), wherever the row is scrolled (tests).
+#[cfg(test)]
+pub(crate) fn press_tab(app: &mut LightcraftApp, ctx: &egui::Context, id: &str) {
+    if let Some((.., tab)) = TABS.iter().find(|(i, ..)| *i == id) {
+        press(app, ctx, *tab);
+    }
+}
+
 /// The tool row (or, `vertical`, column): each tab an icon over its name, the open one lit.
 fn tool_tabs(app: &mut LightcraftApp, ui: &mut egui::Ui, vertical: bool) {
     let t = Tokens::get(ui.ctx());

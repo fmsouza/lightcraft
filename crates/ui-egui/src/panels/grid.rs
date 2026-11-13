@@ -1583,8 +1583,12 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
         let _ = app.run("view.selectMode", json!({"on": true}));
     }
     // Photo ▸ Edit In: a copy with this photo's edits, opened in PhotoCraft or another editor
-    // (desktop only: the web can't start programs)
+    // (desktop only: the web can't start programs, a phone has no other editors to start)
+    let mobile = app.services.mobile;
     ui.add_enabled_ui(crate::menus::ui_enabled(app, "photo.editInPhotoCraft"), |ui| {
+        if mobile {
+            return;
+        }
         crate::widgets::menu_button(ui, crate::i18n::tr("Edit In"), |ui| {
             if ui.button(crate::i18n::tr("Edit in PhotoCraft")).clicked() {
                 let _ = app.run("photo.editInPhotoCraft", json!({}));
@@ -1616,6 +1620,11 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
             }
             Err(e) => app.toast(ui.ctx(), e),
         }
+    }
+    // (the Reference View it is for is a desktop's, beside the photo being edited)
+    if mobile {
+        ui.separator();
+        return;
     }
     let live = super::compare::live(app, id);
     let set_reference = ui
@@ -1731,7 +1740,8 @@ fn context_menu_file_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if can_move_to_folder(app) && ui.button(crate::i18n::tr("Move to Folder…")).clicked() {
         move_to_folder(app, ui.ctx());
     }
-    if ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
+    // (a phone's photos live in the app's own storage, where nothing else changes them)
+    if !app.services.mobile && ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
         // the files are read in the background (activity row `reload`)
         if let Err(e) = app.run("photo.reload", json!({})) {
             app.toast_error(ui.ctx(), e);

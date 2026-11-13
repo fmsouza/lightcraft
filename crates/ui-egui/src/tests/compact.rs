@@ -2237,3 +2237,34 @@ fn presets_plus_is_the_hosts_own_menu_where_it_has_one() {
     assert!(keys.contains(&"more") && keys.contains(&"presetAdd"), "{keys:?}");
     assert!(placed.borrow().iter().any(|(k, n)| *k == "presetAdd" && *n == 3));
 }
+
+#[test]
+fn phone_keeps_desktop_things_out_of_its_drawer_menus_and_tools() {
+    let services = Services { png: None, mobile: true, ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), services), PHONE, 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "photoGrid", "right": "none"}), T)["ok"], true);
+    h.settle(SETTLE);
+    // the drawer: no home folder, Desktop or Downloads to browse
+    click(&mut h, "icon:sidebar");
+    assert!(widget(&h, "source:all").is_some(), "the drawer is open");
+    let ids: Vec<&String> = h.app.widgets.iter().map(|(w, _)| w).collect();
+    assert!(ids.iter().any(|w| w.starts_with("source:album:")), "the drawer's albums");
+    assert!(!ids.iter().any(|w| w.contains("ocal")), "no Local places on a phone: {ids:?}");
+    // a photo's long-press menu: no other editors, no Reload from Disk, no Reference View
+    let ctx = h.view.ctx.clone();
+    crate::panels::back::system_back(&mut h.app, &ctx);
+    h.step();
+    let id = h.app.session.visible_shared().1[0];
+    let _ = h.request("ui.clickWidget", json!({"id": format!("thumb:{}", id.0), "button": "right"}), T);
+    h.step();
+    h.step();
+    let shown = |h: &Headless, text: &str| h.view.painted_shapes().iter().any(|s| matches!(s, egui::Shape::Text(t) if t.galley.job.text == text));
+    assert!(shown(&h, "Find Similar Photos"), "the menu is there");
+    for gone in ["Edit In", "Reload from Disk", "Set as Reference Photo"] {
+        assert!(!shown(&h, gone), "{gone} on a phone");
+    }
+    // a tool opened from the row: no "Masking On" toast over the photo
+    h.app.ui.toast = None;
+    assert!(h.app.run("panel.masking", json!({})).is_ok());
+    assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
+}
