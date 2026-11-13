@@ -190,9 +190,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         if sheet_footer {
             crate::panels::settings::sheet_header(ui, crate::i18n::tr(&title), None, "button:sheetClose");
             ui.separator();
-            let room = (ui.available_height() - SHEET_FOOTER_H).max(DIALOG_MIN_BODY);
+            // the confirm pinned to the sheet's foot, the body scrolling in the room above it
+            let foot = ui.max_rect().bottom();
+            let room = (foot - SHEET_FOOTER_H - ui.cursor().top()).max(DIALOG_MIN_BODY);
             body_h = dialog_body(ui, Some(title.as_str()), room, |ui| dialog_content(app, ui, &t, room, &mut confirm, &mut import_pressed, &mut dlg));
-            footer(app, ui, &dlg, &mut close, &mut confirm);
+            let at = egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), foot - SHEET_BUTTON_H), egui::pos2(ui.max_rect().right(), foot));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| footer(app, ui, &dlg, &mut close, &mut confirm));
             content_w = ui.min_rect().width();
             return;
         }
@@ -601,17 +604,24 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     }
 }
 
-/// Upright on a phone, Settings, About, Assisted Culling and a face model's terms are sheets up
-/// from the bottom edge with a header of their own: (a sheet, with its confirm at its foot (the
-/// last two)).
+/// Upright on a phone, Settings, About, Assisted Culling, a face model's terms, Copy / Paste
+/// Settings and Create Preset are sheets up from the bottom edge with a header of their own: (a
+/// sheet, with its confirm at its foot (all but Settings and About)).
 fn phone_sheet(ctx: &egui::Context, dlg: &Dialog) -> (bool, bool) {
-    let sheet = matches!(dlg, Dialog::Settings { .. } | Dialog::About | Dialog::Cull { .. } | Dialog::FaceModel { .. })
-        && crate::panels::settings::portrait_phone(ctx);
-    (sheet, sheet && matches!(dlg, Dialog::Cull { .. } | Dialog::FaceModel { .. }))
+    // (with their confirm at the foot: those that act)
+    let acts = matches!(
+        dlg,
+        Dialog::Cull { .. } | Dialog::FaceModel { .. } | Dialog::CopySettings { .. } | Dialog::PasteSettings { .. } | Dialog::CreatePreset { .. }
+    );
+    let sheet = (acts || matches!(dlg, Dialog::Settings { .. } | Dialog::About)) && crate::panels::settings::portrait_phone(ctx);
+    (sheet, sheet && acts)
 }
 
-/// The room a phone sheet's confirm takes at its foot.
-const SHEET_FOOTER_H: f32 = 60.0;
+/// The room a phone sheet's confirm takes at its foot: the button and a gap above it.
+const SHEET_FOOTER_H: f32 = SHEET_BUTTON_H + 10.0;
+
+/// A phone sheet's confirm button's height ([`crate::panels::settings::phone_button`]).
+const SHEET_BUTTON_H: f32 = 50.0;
 
 /// A phone sheet's confirm, the width of the sheet at its foot (its ✕ is the cancel).
 fn footer(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
@@ -627,7 +637,6 @@ fn footer(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     if ok.is_empty() {
         return;
     }
-    ui.add_space((ui.available_height() - SHEET_FOOTER_H + 6.0).max(4.0));
     use crate::panels::settings::PhoneButton;
     let style = if informational { PhoneButton::Tinted } else { PhoneButton::Filled };
     let clicked = crate::panels::settings::phone_button(ui, "dialogOk", &ok, style, can_confirm(app, dlg, informational));
@@ -2116,6 +2125,19 @@ fn dialog_content(
             if dialog_field(ui, "field:albumName", name, "Name") {
                 *confirm = true;
             }
+        }
+        Dialog::CreatePreset { name, group, groups } if crate::panels::settings::phone_list(ui) => {
+            // a phone: each field under its name (the first right under the header's line), then
+            // the list of what the preset holds
+            // (the room's width, not INFINITY, which adds the field's margins on top; less its
+            // border, which the edge of the scrolling list would clip)
+            let w = ui.available_width() - 2.0;
+            ui.label(egui::RichText::new(crate::i18n::tr("Preset name").to_uppercase()).font(t.font(14.0)).color(t.text_dim));
+            crate::text_field::TextField::singleline("field:presetName", name).hint(crate::i18n::tr("Preset name")).width(w).show(ui);
+            crate::panels::settings::heading(ui, t, "Group");
+            crate::text_field::TextField::singleline("field:presetGroup", group).hint(crate::i18n::tr("Group")).width(w).show(ui);
+            crate::panels::settings::heading(ui, t, "Settings to include");
+            group_checklist(ui, "presetInclude", groups);
         }
         Dialog::CreatePreset { name, group, groups } => {
             crate::widgets::named(

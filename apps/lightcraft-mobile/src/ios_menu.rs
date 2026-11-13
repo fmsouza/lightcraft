@@ -1,15 +1,17 @@
-//! iOS: the phone's "…" as the system's menu. A clear UIButton sits over the "…" egui drew and
-//! takes its tap; it opens a UIMenu (sections with titles, SF Symbols, check marks, submenus)
-//! built when it opens from the latest items the app sent ([`lightcraft_ui_egui::native_menu`]).
+//! iOS: the phone's "…" (and other menu buttons, Presets' +) as the system's menu. A clear UIButton
+//! sits over each button egui drew and takes its tap; it opens a UIMenu (sections with titles, SF
+//! Symbols, check marks, submenus) built when it opens from the latest items the app sent
+//! ([`lightcraft_ui_egui::native_menu`]).
 //! What is picked goes back to the app, which runs it on the next frame.
 #![allow(unsafe_code)] // Objective-C messages and blocks
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
 use block2::{DynBlock, RcBlock};
-use lightcraft_ui_egui::native_menu::{MenuRequest, NativeItem};
+use lightcraft_ui_egui::native_menu::{MenuButton, MenuRequest, NativeItem};
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, msg_send};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -20,28 +22,43 @@ use objc2_ui_kit::{
 };
 
 thread_local! {
-    static BUTTON: RefCell<Option<Retained<UIButton>>> = const { RefCell::new(None) };
-    /// The items the menu shows when it next opens, and where the button is (egui points).
-    static LATEST: RefCell<Option<(egui::Rect, Arc<Vec<NativeItem>>)>> = const { RefCell::new(None) };
+    /// A native button for each of the app's menu buttons, by key (made once, hidden when off screen).
+    static BUTTONS: RefCell<HashMap<&'static str, Retained<UIButton>>> = RefCell::new(HashMap::new());
+    /// For each button on screen: where it is (egui points) and the items its menu shows when it
+    /// next opens.
+    static LATEST: RefCell<HashMap<&'static str, (egui::Rect, Arc<Vec<NativeItem>>)>> = RefCell::new(HashMap::new());
 }
 
-/// The app's request for this frame (main thread): move the button over "…", or hide it.
+/// The app's request for this frame (main thread): move each native button over its button, and
+/// hide the ones whose buttons aren't on screen.
 pub fn update(request: MenuRequest, ctx: &egui::Context) {
     let Some(mtm) = MainThreadMarker::new() else { return };
-    let rect = request.as_ref().map(|(r, _)| *r);
-    let moved = LATEST.with_borrow(|l| l.as_ref().map(|(r, _)| *r) != rect);
-    LATEST.with_borrow_mut(|l| *l = request);
-    let button = BUTTON.with_borrow_mut(|b| {
-        if b.is_none() {
-            *b = make_button(mtm, ctx);
+    BUTTONS.with_borrow(|buttons| {
+        for (key, button) in buttons {
+            if !request.iter().any(|r| r.key == *key) {
+                button.setHidden(true);
+            }
         }
-        b.clone()
+    });
+    LATEST.with_borrow_mut(|l| l.retain(|key, _| request.iter().any(|r| r.key == *key)));
+    for r in request {
+        place(mtm, r, ctx);
+    }
+}
+
+/// Put `r`'s native button over it (made the first time).
+fn place(mtm: MainThreadMarker, r: MenuButton, ctx: &egui::Context) {
+    let rect = r.rect;
+    let moved = LATEST.with_borrow(|l| l.get(r.key).map(|(at, _)| *at) != Some(rect));
+    LATEST.with_borrow_mut(|l| l.insert(r.key, (rect, r.items)));
+    let button = BUTTONS.with_borrow_mut(|b| {
+        if !b.contains_key(r.key) {
+            let made = make_button(mtm, ctx, r.key, &r.label)?;
+            b.insert(r.key, made);
+        }
+        b.get(r.key).cloned()
     });
     let Some(button) = button else { return };
-    let Some(rect) = rect else {
-        button.setHidden(true);
-        return;
-    };
     if moved || button.isHidden() {
         // egui points → UIKit points
         let ppp = ctx.pixels_per_point();
@@ -57,15 +74,16 @@ pub fn update(request: MenuRequest, ctx: &egui::Context) {
     }
 }
 
-/// The clear button over "…", on winit's view, with a menu whose items are made as it opens.
-fn make_button(mtm: MainThreadMarker, ctx: &egui::Context) -> Option<Retained<UIButton>> {
+/// The clear button over the app's button `key`, on winit's view, with a menu whose items are
+/// made as it opens.
+fn make_button(mtm: MainThreadMarker, ctx: &egui::Context, key: &'static str, label: &str) -> Option<Retained<UIButton>> {
     let view = crate::ios_scene::root_view_controller()?.view()?;
     let button = UIButton::buttonWithType(UIButtonType::System, mtm);
     // SAFETY: setting the accessibility label NSString property of a UIView, on the main thread
-    let _: () = unsafe { msg_send![&*button, setAccessibilityLabel: &*NSString::from_str("More")] };
+    let _: () = unsafe { msg_send![&*button, setAccessibilityLabel: &*NSString::from_str(label)] };
     let ctx = ctx.clone();
     let provider = RcBlock::new(move |done: NonNull<DynBlock<dyn Fn(NonNull<NSArray<UIMenuElement>>)>>| {
-        let items = LATEST.with_borrow(|l| l.as_ref().map(|(_, i)| i.clone())).unwrap_or_default();
+        let items = LATEST.with_borrow(|l| l.get(key).map(|(_, i)| i.clone())).unwrap_or_default();
         let elements = elements(mtm, &items, &ctx);
         // SAFETY: UIKit's completion block, called once on the main thread with the menu's items
         unsafe { done.as_ref() }.call((NonNull::from(&*elements),));

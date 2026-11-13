@@ -107,8 +107,12 @@ fn look(ctx: &egui::Context) -> Look {
 }
 
 /// Create Preset… and "…" (thumbnails, import, export), right to left in `ui`, `size` square: the
-/// panel's header on the desktop, the sheet's on a phone.
+/// panel's header on the desktop, the sheet's on a phone. A phone has + alone ([`phone_add`]).
 pub(crate) fn header_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, size: f32) {
+    if crate::panels::compact::is_compact(ui.ctx()) {
+        phone_add(app, ui, size);
+        return;
+    }
     if icon_button(ui, "presetCreate", Icon::Plus, vec2(size, size), false, app.session.active().is_some(), crate::i18n::tr("Create Preset…"))
         .clicked()
     {
@@ -127,6 +131,54 @@ pub(crate) fn header_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, size: f
             let _ = app.run("file.exportPresets", json!({}));
         }
     });
+}
+
+/// A phone's +: a menu, as a phone's photo apps have it, to make a preset from the photo or import
+/// preset files (and export the user's own). The system's menu where the host has one (iOS puts
+/// its button over the +, Android opens its popup on the tap); else a drawn one. No "…": a phone's
+/// list always shows thumbnails, and import and export are here.
+fn phone_add(app: &mut LightcraftApp, ui: &mut egui::Ui, size: f32) {
+    let add = icon_button(ui, "presetAdd", Icon::Plus, vec2(size, size), false, true, crate::i18n::tr("Add"));
+    if app.services.menu_button.is_some() {
+        let items = crate::native_menu::preset_add_items(app);
+        crate::native_menu::place_button(ui.ctx(), "presetAdd", crate::i18n::tr("Add"), add.rect, items);
+        return;
+    }
+    if add.clicked() && app.services.open_menu.is_some() {
+        let items = crate::native_menu::preset_add_items(app);
+        if let Some(open) = app.services.open_menu.as_mut() {
+            open(add.rect, &items);
+        }
+        return;
+    }
+    egui::Popup::menu(&add).show(|ui| {
+        for item in crate::native_menu::preset_add_items(app) {
+            drawn_item(app, ui, &item);
+        }
+    });
+}
+
+/// One item of [`crate::native_menu::preset_add_items`] in a drawn menu.
+fn drawn_item(app: &mut LightcraftApp, ui: &mut egui::Ui, item: &crate::native_menu::NativeItem) {
+    use crate::native_menu::NativeItem;
+    match item {
+        NativeItem::Action { id, params, label, enabled, .. } => {
+            let r = ui.add_enabled(*enabled, egui::Button::new(label.as_str()));
+            register(ui, format!("presetAddMenu:{id}"), r.rect);
+            if r.clicked() {
+                if let Err(e) = crate::menubar::run_item(app, id, params.clone()) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+        }
+        NativeItem::Section { items, .. } | NativeItem::Submenu { items, .. } => {
+            ui.separator();
+            for i in items {
+                drawn_item(app, ui, i);
+            }
+        }
+    }
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {

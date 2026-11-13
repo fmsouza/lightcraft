@@ -159,9 +159,18 @@ pub(super) fn export_dialog_params(
 
 // ------------------------------------------------------------------------------------------ dialog widgets
 
+fn group_key(g: &SettingsGroup) -> String {
+    serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+}
+
 /// Two columns of settings-group checkboxes (Copy Settings, Create Preset) plus All / None.
+/// Upright on a phone, a list of tick boxes under the editor's section names ([`phone_checklist`]).
 pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>) {
-    let key_of = |g: &SettingsGroup| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    if crate::panels::settings::phone_list(ui) {
+        phone_checklist(ui, tag, groups);
+        return;
+    }
+    let key_of = group_key;
     ui.columns(2, |cols| {
         for (i, g) in SettingsGroup::ALL.iter().enumerate() {
             let key = key_of(g);
@@ -189,6 +198,47 @@ pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<Str
             groups.clear();
         }
     });
+}
+
+/// The settings groups under the names of the editor's sections, as a phone editor lists what to
+/// copy.
+const PHONE_SECTIONS: [(&str, &[SettingsGroup]); 8] = {
+    use SettingsGroup as G;
+    [
+        ("Basic", &[G::Profile, G::Treatment, G::WhiteBalance]),
+        ("Light", &[G::Light, G::ToneCurve]),
+        ("Color", &[G::Color, G::ColorMixer, G::ColorGrading]),
+        ("Effects", &[G::Effects, G::Vignette, G::Grain]),
+        ("Detail", &[G::Detail, G::LensBlur]),
+        ("Optics", &[G::Optics, G::Calibration]),
+        ("Geometry", &[G::Geometry, G::Crop]),
+        ("Masking", &[G::Masks, G::Spots, G::RedEye]),
+    ]
+};
+
+/// A phone's checklist: Select All, then a tick box a row (the whole row a target) under each
+/// section's name. Ids as the desktop's (`check:{tag}:{group}`, `check:{tag}:all`).
+fn phone_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>) {
+    let t = Tokens::get(ui.ctx());
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let mut all = SettingsGroup::ALL.iter().all(|g| groups.contains(&group_key(g)));
+    if crate::panels::settings::tick_box(ui, &format!("{tag}:all"), &mut all, crate::i18n::tr("Select All")) {
+        *groups = if all { SettingsGroup::ALL.iter().map(group_key).collect() } else { Vec::new() };
+    }
+    for (title, members) in PHONE_SECTIONS {
+        crate::panels::settings::heading(ui, &t, title);
+        for g in members {
+            let key = group_key(g);
+            let mut on = groups.contains(&key);
+            if crate::panels::settings::tick_box(ui, &format!("{tag}:{key}"), &mut on, crate::i18n::tr(g.label())) {
+                if on {
+                    groups.push(key);
+                } else {
+                    groups.retain(|x| *x != key);
+                }
+            }
+        }
+    }
 }
 
 /// Width of the label column in dialogs.

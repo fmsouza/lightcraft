@@ -22,9 +22,22 @@ pub enum NativeItem {
     Submenu { label: String, symbol: &'static str, items: Vec<NativeItem> },
 }
 
-/// Where "…" is this frame (egui points) and its menu; `None`: no "…" on screen, or something
-/// is over it (a dialog, a sheet), so the native button steps aside.
-pub type MenuRequest = Option<(egui::Rect, Arc<Vec<NativeItem>>)>;
+/// A button the host covers with its own: "…" in the bar, or another that opens a menu (the
+/// Presets sheet's +).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuButton {
+    /// Which button ("more", "presetAdd"): the host keeps one native button for each.
+    pub key: &'static str,
+    /// What a screen reader says for it.
+    pub label: String,
+    /// Where it is this frame (egui points).
+    pub rect: egui::Rect,
+    pub items: Arc<Vec<NativeItem>>,
+}
+
+/// The buttons on screen this frame with their menus; one missing (or none: something is over
+/// them, a dialog or a popup) has its native button step aside.
+pub type MenuRequest = Vec<MenuButton>;
 
 /// Picks the host's menu made, waiting for the next frame.
 static PICKS: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
@@ -45,9 +58,20 @@ fn placed_id() -> egui::Id {
     egui::Id::unique("native-more")
 }
 
+fn others_id() -> egui::Id {
+    egui::Id::unique("native-menu-buttons")
+}
+
 /// The compact bar drew "…" at `rect`: the native button goes there at the end of the frame.
 pub(crate) fn place(ctx: &egui::Context, rect: egui::Rect, editor: bool) {
     ctx.data_mut(|d| d.insert_temp(placed_id(), Placed { rect, editor }));
+}
+
+/// A button other than "…" was drawn at `rect` with the menu `items` (a host with native menus
+/// covers it at the end of the frame, as it does "…").
+pub(crate) fn place_button(ctx: &egui::Context, key: &'static str, label: &str, rect: egui::Rect, items: Vec<NativeItem>) {
+    let button = MenuButton { key, label: label.to_string(), rect, items: Arc::new(items) };
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<MenuButton>>(others_id()).push(button));
 }
 
 /// Run what the host's menu picked since the last frame.
@@ -66,14 +90,22 @@ pub(crate) fn sync(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.services.menu_button.is_none() {
         return;
     }
-    let placed = ctx.data_mut(|d| {
+    let (placed, others) = ctx.data_mut(|d| {
         let p = d.get_temp::<Placed>(placed_id());
         d.remove::<Placed>(placed_id());
-        p
+        let others = d.get_temp::<Vec<MenuButton>>(others_id()).unwrap_or_default();
+        d.remove::<Vec<MenuButton>>(others_id());
+        (p, others)
     });
     let covered = app.ui.dialog.is_some() || ctx.memory(|m| m.top_modal_layer().is_some()) || egui::Popup::is_any_open(ctx);
-    let request = match placed {
-        Some(p) if !covered => {
+    if covered {
+        if let Some(f) = app.services.menu_button.as_mut() {
+            f(Vec::new());
+        }
+        return;
+    }
+    let more = match placed {
+        Some(p) => {
             let now = ctx.input(|i| i.time);
             let cache = egui::Id::unique("native-more-items");
             let items = match ctx.data(|d| d.get_temp::<(f64, bool, Arc<Vec<NativeItem>>)>(cache)) {
@@ -85,10 +117,11 @@ pub(crate) fn sync(app: &mut LightcraftApp, ctx: &egui::Context) {
                     items
                 }
             };
-            Some((p.rect, items))
+            Some(MenuButton { key: "more", label: crate::i18n::tr("More").into(), rect: p.rect, items })
         }
-        _ => None,
+        None => None,
     };
+    let request: MenuRequest = more.into_iter().chain(others).collect();
     if let Some(f) = app.services.menu_button.as_mut() {
         f(request);
     }
@@ -195,6 +228,29 @@ pub fn more_items(app: &LightcraftApp, editor: bool) -> Vec<NativeItem> {
         items.push(section("", vec![action("app.settings", "App Settings", "gearshape"), action("app.about", "About LightCraft", "info.circle")]));
         items
     }
+}
+
+/// Presets' +: make a preset from the photo's settings, or bring in preset files; the user's own
+/// presets go out as a file from here too.
+pub fn preset_add_items(app: &LightcraftApp) -> Vec<NativeItem> {
+    let action = |id: &str, label: &str, symbol: &'static str, enabled: bool| NativeItem::Action {
+        id: id.into(),
+        params: json!({}),
+        label: crate::i18n::tr(label).into(),
+        symbol,
+        enabled,
+        checked: false,
+        destructive: false,
+    };
+    let any_user = app.session.presets.iter().any(|p| !p.builtin);
+    vec![
+        action("dialog.createPreset", "Create Preset…", "plus", app.session.active().is_some()),
+        action("file.importPresets", "Import Presets…", "square.and.arrow.down", true),
+        NativeItem::Section {
+            title: String::new(),
+            items: vec![action("file.exportPresets", "Export User Presets…", "square.and.arrow.up", any_user)],
+        },
+    ]
 }
 
 /// `items` as JSON for a host that builds its menu in another language (Android's Java):

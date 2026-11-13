@@ -122,8 +122,8 @@ fn phone_width_dialogs_fit_the_screen() {
     for command in ["app.settings", "dialog.export", "app.shortcuts", "dialog.mergeHdr", "dialog.labelNames", "dialog.copySettings"] {
         open(&mut h, command);
         assert!(h.app.ui.dialog.is_some(), "{command} opened a dialog");
-        // (Settings is a sheet that slides up: measured once it is in place)
-        for _ in 0..if command == "app.settings" { 60 } else { 0 } {
+        // (Settings and Copy Settings are sheets that slide up: measured once in place)
+        for _ in 0..if matches!(command, "app.settings" | "dialog.copySettings") { 60 } else { 0 } {
             h.step();
         }
         let r = dialog_rect(&h).unwrap_or_else(|| panic!("{command}: no dialog window"));
@@ -1677,13 +1677,11 @@ fn phone_presets_list_shows_looks_in_finger_sized_rows() {
     assert!(row.height() >= 60.0, "a thumbnail row a finger can take: {row:?}");
     let group = h.app.widgets.iter().find(|(w, _)| w.starts_with("presetGroup:")).map(|(_, r)| *r).expect("a group heading");
     assert!(group.height() >= 44.0, "{group:?}");
-    // + and "…" in the sheet's header, beside its title and Hide (no strip of their own)
+    // + in the sheet's header, beside its title and Hide (no strip of its own)
     let hide = widget(&h, "icon:sheetClose").expect("the sheet's Hide");
-    for id in ["icon:presetCreate", "icon:presetMore"] {
-        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
-        assert!(r.height() >= 36.0 && (r.center().y - hide.center().y).abs() < 1.0, "{id} in the header: {r:?}");
-        assert!(r.bottom() <= group.top(), "{id} above the list");
-    }
+    let r = widget(&h, "icon:presetAdd").expect("+");
+    assert!(r.height() >= 36.0 && (r.center().y - hide.center().y).abs() < 1.0, "+ in the header: {r:?}");
+    assert!(r.bottom() <= group.top(), "+ above the list");
     // the desktop keeps its dense list
     let d = demo([1400.0, 900.0], json!({"view": "detail", "presets": true}));
     if let Some(row) = d.app.widgets.iter().find(|(w, _)| w.starts_with("preset:")).map(|(_, r)| *r) {
@@ -1849,8 +1847,9 @@ fn native_menu_phone() -> (Headless, std::sync::Arc<std::sync::Mutex<Vec<crate::
 fn phone_more_is_the_hosts_menu_over_the_dots() {
     let (mut h, seen) = native_menu_phone();
     h.step();
-    let last = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().cloned().flatten();
-    let (rect, items) = last.expect("the host is asked to show its menu");
+    let last = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().cloned();
+    let more = last.and_then(|r| r.into_iter().find(|b| b.key == "more"));
+    let crate::native_menu::MenuButton { rect, items, .. } = more.expect("the host is asked to show its menu");
     assert_eq!(Some(rect), widget(&h, "icon:more"), "over the drawn …");
     // the library's sections
     let has = |id: &str| {
@@ -1870,7 +1869,7 @@ fn phone_more_is_the_hosts_menu_over_the_dots() {
     assert!(h.app.run("app.about", json!({})).is_ok());
     h.step();
     let last = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().cloned();
-    assert!(matches!(last, Some(None)), "hidden under a dialog");
+    assert!(last.is_some_and(|r| r.is_empty()), "hidden under a dialog");
     h.app.ui.dialog = None;
     // a pick runs on the next frame
     crate::native_menu::pick("app.settings", json!({}));
@@ -2143,4 +2142,98 @@ fn phone_about_holds_the_help_menus_rows() {
         let r = widget(&h, id).unwrap_or_else(|| panic!("{id} in About"));
         assert!(r.height() >= 44.0, "{id}: {r:?}");
     }
+}
+
+/// A phone in the editor, with a PNG encoder when `$LIGHTCRAFT_TEST_SHOTS` asks for screenshots.
+fn editor_phone_for_shots() -> Headless {
+    let shots = std::env::var_os("LIGHTCRAFT_TEST_SHOTS").is_some();
+    let png: Option<crate::PngEncode> = shots.then(|| -> crate::PngEncode {
+        Box::new(|img: &lightcraft_raster::Rgba8| {
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+        })
+    });
+    let services = Services {
+        png,
+        write: Some(Box::new(lightcraft_engine::export::write_file)),
+        write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
+        ..Default::default()
+    };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), services), PHONE, if shots { 3.0 } else { 1.0 });
+    assert_eq!(h.request("ui.set", json!({"view": "detail", "right": "edit"}), T)["ok"], true);
+    h.settle(SETTLE);
+    h
+}
+
+/// A headless screenshot into `$LIGHTCRAFT_TEST_SHOTS`, when it is set.
+fn shot(h: &mut Headless, name: &str) {
+    if let Some(p) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+        let r = h.request("ui.screenshot", json!({"path": std::path::Path::new(&p).join(name).to_string_lossy(), "headless": true}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+}
+
+#[test]
+fn phone_copy_settings_is_a_sheet_of_tick_boxes_with_copy_at_its_foot() {
+    use crate::state::Dialog;
+    let mut h = editor_phone_for_shots();
+    assert!(h.app.run("dialog.copySettings", json!({})).is_ok());
+    for _ in 0..60 {
+        h.step();
+    }
+    shot(&mut h, "copy-settings.png");
+    let close = widget(&h, "button:sheetClose").expect("the sheet's ✕");
+    let all = widget(&h, "check:copyGroup:all").expect("Select All");
+    let light = widget(&h, "check:copyGroup:light").expect("Light as a row");
+    assert!(light.height() >= 44.0 && light.width() > PHONE[0] * 0.8, "a row a finger can take: {light:?}");
+    assert!(close.bottom() <= all.top() && all.bottom() <= light.top());
+    let ok = widget(&h, "button:dialogOk").expect("Copy at the foot");
+    assert!(ok.width() > PHONE[0] * 0.8 && ok.bottom() > PHONE[1] - 80.0, "{ok:?}");
+    // a row's tap ticks it off, Select All ticks them all
+    let had = |h: &Headless, k: &str| matches!(&h.app.ui.dialog, Some(Dialog::CopySettings { groups }) if groups.iter().any(|g| g == k));
+    assert!(had(&h, "light"));
+    click(&mut h, "check:copyGroup:light");
+    assert!(!had(&h, "light"), "unticked");
+    click(&mut h, "check:copyGroup:all");
+    assert!(had(&h, "light") && had(&h, "crop"), "all ticked");
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_none(), "copied, and closed");
+}
+
+#[test]
+fn phone_create_preset_is_a_sheet_and_presets_plus_opens_a_menu() {
+    let mut h = editor_phone_for_shots();
+    click(&mut h, "icon:presets");
+    assert!(widget(&h, "icon:presetMore").is_none(), "no \"…\" on a phone");
+    click(&mut h, "icon:presetAdd");
+    shot(&mut h, "preset-add-menu.png");
+    for id in ["presetAddMenu:dialog.createPreset", "presetAddMenu:file.importPresets", "presetAddMenu:file.exportPresets"] {
+        assert!(widget(&h, id).is_some(), "{id} in +'s menu");
+    }
+    click(&mut h, "presetAddMenu:dialog.createPreset");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::CreatePreset { .. })));
+    for _ in 0..60 {
+        h.step();
+    }
+    shot(&mut h, "create-preset.png");
+    assert!(widget(&h, "field:presetName").is_some() && widget(&h, "check:presetInclude:light").is_some());
+    assert!(widget(&h, "button:dialogOk").is_some_and(|ok| ok.width() > PHONE[0] * 0.8), "Create at the foot");
+}
+
+#[test]
+fn presets_plus_is_the_hosts_own_menu_where_it_has_one() {
+    let placed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = placed.clone();
+    let services = Services {
+        menu_button: Some(Box::new(move |r: crate::native_menu::MenuRequest| {
+            *seen.borrow_mut() = r.iter().map(|b| (b.key, b.items.len())).collect()
+        })),
+        ..Default::default()
+    };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), services), PHONE, 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail", "right": "edit"}), T)["ok"], true);
+    h.settle(SETTLE);
+    click(&mut h, "icon:presets");
+    let keys: Vec<&str> = placed.borrow().iter().map(|(k, _)| *k).collect();
+    assert!(keys.contains(&"more") && keys.contains(&"presetAdd"), "{keys:?}");
+    assert!(placed.borrow().iter().any(|(k, n)| *k == "presetAdd" && *n == 3));
 }
