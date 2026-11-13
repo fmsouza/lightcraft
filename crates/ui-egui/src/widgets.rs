@@ -1170,6 +1170,9 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
 /// A small bordered text button (Auto, B&W, HDR…).
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
+    // (a key hint, "Swap Aspect (X)", means nothing where there is no keyboard)
+    let finger = finger_ui(ui);
+    let label = if finger { split_key_hint(label).0 } else { label };
     let t = Tokens::get(ui.ctx());
     let (font, h) = text_button_font(ui);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
@@ -1185,6 +1188,15 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
         t.button
     };
     let p = ui.painter();
+    if finger {
+        // a phone's button: a rounded fill without a frame, tinted with the accent when on
+        let (fill, text) = if active { (t.accent.gamma_multiply(0.22), t.accent) } else { (t.button, t.text) };
+        let fill = if resp.is_pointer_button_down_on() { fill.gamma_multiply(0.7) } else { fill };
+        p.rect_filled(r, CornerRadius::same(10), fill);
+        let galley = ui.painter().layout_no_wrap(label.to_string(), text_button_font(ui).0, text);
+        p.galley(r.center() - galley.size() / 2.0, galley, text);
+        return resp;
+    }
     p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
@@ -1193,6 +1205,12 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
 /// Where controls are finger-sized ([`crate::panels::compact::finger_style`]): a phone's dialogs.
 pub(crate) fn finger_ui(ui: &Ui) -> bool {
     ui.spacing().interact_size.y >= 44.0
+}
+
+/// A phone's controls: finger-sized ones, or anything in the compact (phone) layout, the
+/// editor's sheet among them. Switches and segmented controls take the system's look there.
+pub(crate) fn phone_ui(ui: &Ui) -> bool {
+    finger_ui(ui) || crate::panels::compact::is_compact(ui.ctx())
 }
 
 /// A [`text_button`]'s label font and height: larger where controls are finger-sized.
@@ -1215,6 +1233,9 @@ pub fn text_button_size(ui: &Ui, label: &str) -> f32 {
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
 /// addressable as `button:{id}-{key}` (keys parallel to labels). Returns the clicked index.
 pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {
+    if phone_ui(ui) {
+        return phone_segmented(ui, id, items, active, per_row);
+    }
     let t = Tokens::get(ui.ctx());
     let per_row = per_row.max(1);
     let gap = 4.0;
@@ -1247,6 +1268,103 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
         });
     }
     clicked
+}
+
+/// [`segmented`] on a phone: the system's segmented control, a rounded track with the chosen
+/// segment raised in it, rows of `per_row` (ids as the desktop's).
+fn phone_segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let per_row = per_row.max(1);
+    let mut clicked = None;
+    for (row_i, row) in items.chunks(per_row).enumerate() {
+        let w = ui.available_width();
+        let (track, _) = ui.allocate_exact_size(vec2(w, 36.0), Sense::hover());
+        ui.painter().rect_filled(track, CornerRadius::same(9), t.button);
+        let seg_w = (track.width() - 4.0) / per_row as f32;
+        for (j, (label, key)) in row.iter().enumerate() {
+            let label = crate::i18n::tr(label);
+            let i = row_i * per_row + j;
+            let r = Rect::from_min_size(pos2(track.left() + 2.0 + seg_w * j as f32, track.top() + 2.0), vec2(seg_w, track.height() - 4.0));
+            let resp = ui.interact(r, egui::Id::unique(("phone-segment", id, i)), Sense::click());
+            crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
+            register(ui, format!("button:{id}-{key}"), r);
+            let on = active == Some(i);
+            let p = ui.painter();
+            if on {
+                p.rect_filled(r, CornerRadius::same(7), t.pressed);
+            }
+            let font = if on { t.semibold(13.5) } else { t.font(13.5) };
+            p.text(r.center(), Align2::CENTER_CENTER, label, font, t.text);
+            if resp.clicked() {
+                clicked = Some(i);
+            }
+        }
+    }
+    clicked
+}
+
+/// A phone's row of choices as pills that scroll sideways when they don't fit (an aspect ratio,
+/// a filter): the chosen one filled with the accent (`button:{id}-{key}`). Returns the index tapped.
+pub(crate) fn chip_row(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let mut clicked = None;
+    let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() };
+    egui::ScrollArea::horizontal()
+        .id_salt(("chip-row", id))
+        .scroll_source(drag)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for (i, (label, key)) in items.iter().enumerate() {
+                    let label = crate::i18n::tr(label);
+                    let on = active == Some(i);
+                    let font = if on { t.semibold(14.0) } else { t.font(14.0) };
+                    let galley = ui.painter().layout_no_wrap(label.to_string(), font, if on { Color32::WHITE } else { t.text });
+                    let (r, resp) = ui.allocate_exact_size(vec2(galley.size().x + 28.0, 36.0), Sense::click());
+                    announce_selected(&resp, label.to_string(), on);
+                    register(ui, format!("button:{id}-{key}"), r);
+                    let fill = if on { t.accent } else { t.button };
+                    let fill = if resp.is_pointer_button_down_on() { fill.gamma_multiply(0.7) } else { fill };
+                    ui.painter().rect_filled(r, CornerRadius::same(18), fill);
+                    ui.painter().galley(r.center() - galley.size() / 2.0, galley, Color32::WHITE);
+                    if resp.clicked() {
+                        clicked = Some(i);
+                    }
+                }
+            });
+        });
+    clicked
+}
+
+/// A phone's row of tools: a round button each with its name under it, spread across the width
+/// (`button:{id}`; `on` lit with the accent). Returns the id tapped.
+pub(crate) fn tool_buttons<'a>(ui: &mut Ui, tools: &[(&'a str, Icon, &str, bool)]) -> Option<&'a str> {
+    let t = Tokens::get(ui.ctx());
+    let n = tools.len().max(1) as f32;
+    let w = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(vec2(w, 66.0), Sense::hover());
+    let cell = row.width() / n;
+    let mut tapped = None;
+    for (i, (id, icon, label, on)) in tools.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(row.left() + cell * i as f32, row.top()), vec2(cell, row.height()));
+        let resp = ui.interact(r, egui::Id::unique(("phone-tool", *id)), Sense::click());
+        let label = crate::i18n::tr(label);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, *on, label));
+        register(ui, format!("button:{id}"), r);
+        let disc = Rect::from_center_size(pos2(r.center().x, r.top() + 22.0), vec2(42.0, 42.0));
+        let p = ui.painter();
+        let fill = if *on { t.accent.gamma_multiply(0.22) } else { t.button };
+        let fill = if resp.is_pointer_button_down_on() { fill.gamma_multiply(0.7) } else { fill };
+        p.circle_filled(disc.center(), 21.0, fill);
+        let color = if *on { t.accent } else { t.icon };
+        crate::icons::paint(p, disc.shrink(11.0), *icon, color);
+        p.text(pos2(r.center().x, r.bottom() - 8.0), Align2::CENTER_CENTER, label, t.font(11.0), if *on { t.accent } else { t.text_dim });
+        if resp.clicked() {
+            tapped = Some(*id);
+        }
+    }
+    tapped
 }
 
 /// Splits a tooltip that ends in its key hint ("Edit (E)", "Import Photos… (⌘⇧I)") into the label

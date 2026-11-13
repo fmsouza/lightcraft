@@ -1632,7 +1632,8 @@ fn phone_held_sideways_shows_the_photo_alone_turned() {
 #[test]
 fn phone_tool_panels_have_finger_sized_controls_under_one_title() {
     let h = demo(PHONE, json!({"view": "detail", "right": "crop"}));
-    for id in ["button:cropRotateLeft", "button:cropRotateRight", "button:cropFlipH", "button:cropLock"] {
+    // (the phone's own Crop: `phone_crop_is_chips_and_round_tools`)
+    for id in ["button:cropRotateLeft", "button:cropFlipH", "button:straightenTool"] {
         let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
         assert!(r.height() >= 44.0, "{id} is a finger's height: {r:?}");
     }
@@ -2267,4 +2268,32 @@ fn phone_keeps_desktop_things_out_of_its_drawer_menus_and_tools() {
     h.app.ui.toast = None;
     assert!(h.app.run("panel.masking", json!({})).is_ok());
     assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
+}
+
+#[test]
+fn phone_crop_is_chips_and_round_tools() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    // the tool row's Crop, wherever the row is scrolled
+    let ctx = h.view.ctx.clone();
+    crate::panels::compact::press_tab(&mut h.app, &ctx, "crop");
+    h.step();
+    h.step();
+    let chip = widget(&h, "button:cropAspect-1x1").expect("1 × 1 as a chip");
+    assert!(chip.height() >= 36.0, "{chip:?}");
+    for id in
+        ["button:cropRotateLeft", "button:cropFlipH", "button:cropFlipV", "button:cropSwapAspect", "button:straightenTool", "button:straightenAuto"]
+    {
+        let r = widget(&h, id).unwrap_or_else(|| panic!("{id}"));
+        assert!(r.height() >= 44.0, "{id}: {r:?}");
+    }
+    let shown =
+        |h: &Headless, text: &str| h.view.painted_shapes().iter().any(|s| matches!(s, egui::Shape::Text(t) if t.galley.job.text.contains(text)));
+    assert!(!shown(&h, "(X)") && !shown(&h, "Locked"), "no key hints or Lock button on a phone");
+    click(&mut h, "button:cropAspect-1x1");
+    assert_eq!(h.app.crop_tool_aspect(), Some((100, 100)), "a chip locks its aspect");
+    click(&mut h, "button:cropAspect-free");
+    assert_eq!(h.app.crop_tool_aspect(), None, "Free unlocks");
+    let flipped = |h: &Headless| h.app.session.active().and_then(|id| h.app.session.develop_of(id)).is_some_and(|d| d.crop.flip_h);
+    click(&mut h, "button:cropFlipH");
+    assert!(flipped(&h), "Flip H flips");
 }

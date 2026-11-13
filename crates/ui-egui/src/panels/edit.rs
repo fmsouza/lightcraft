@@ -129,9 +129,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.session.source_info(id).local_tone.is_some() {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
             let mut on = d.profile.camera_local_tone;
-            let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
-            crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
-            if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
+            let changed = if crate::widgets::finger_ui(ui) {
+                // a phone's switch row
+                crate::panels::settings::check(ui, "profile.cameraLocalTone", &mut on, "Camera local tone mapping")
+            } else {
+                let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
+                crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
+                r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed()
+            };
+            if changed {
                 let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
         });
@@ -383,12 +389,13 @@ fn detail_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetting
 fn optics_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
     let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
+        // (`check`: a phone's switch row, a check box elsewhere)
         let mut ca = d.optics.remove_ca;
-        if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
+        if crate::panels::settings::check(ui, "optics.removeCa", &mut ca, "Remove Chromatic Aberration") {
             let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
         }
         let mut lp = d.optics.lens_profile;
-        if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
+        if crate::panels::settings::check(ui, "optics.lensProfile", &mut lp, "Enable Lens Corrections") {
             let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
         }
         if lp && !has_lens {

@@ -109,7 +109,7 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 /// A checkbox addressable as `check:{id}`; true when toggled. Where controls are finger-sized it
 /// is a phone's switch: the label on the left, the switch at the right edge, the whole row a target.
 pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
-    if crate::widgets::finger_ui(ui) {
+    if crate::widgets::phone_ui(ui) {
         return switch_row(ui, id, value, crate::i18n::tr(label));
     }
     let r = ui.checkbox(value, crate::i18n::tr(label));
