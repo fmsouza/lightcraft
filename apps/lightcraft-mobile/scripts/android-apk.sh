@@ -32,7 +32,10 @@ cp "$WORK/dex/classes.dex" "$WORK/stage/"
     "$WORK/res.zip"
 (cd "$WORK/stage" && zip -q -0 -r ../base.apk lib classes.dex)
 "$BT/zipalign" -f -p 4 "$WORK/base.apk" "$WORK/aligned.apk"
-KS=$OUT/lightcraft-debug.keystore
+# (kept outside target/: `cargo clean` would otherwise make a new key, and Android refuses to
+# update an app signed with another)
+KS=${LIGHTCRAFT_KEYSTORE:-$HOME/.android/lightcraft-debug.keystore}
+mkdir -p "$(dirname "$KS")"
 [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass android -keypass android -alias debug \
     -keyalg RSA -validity 3650 -dname "CN=LightCraft debug" >/dev/null 2>&1
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --out "$OUT/lightcraft-mobile.apk" "$WORK/aligned.apk"
