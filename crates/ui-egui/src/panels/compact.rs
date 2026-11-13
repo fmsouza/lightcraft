@@ -859,21 +859,30 @@ fn tool_tabs(app: &mut LightcraftApp, ui: &mut egui::Ui, vertical: bool) {
             }
         }
     };
-    let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() };
+    // dragged by the finger anywhere on the row: no scroll bar to grab as well (a phone's tool
+    // rows have none)
+    let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, scroll_bar: false, ..Default::default() };
+    let hidden = egui::scroll_area::ScrollBarVisibility::AlwaysHidden;
     if vertical {
-        egui::ScrollArea::vertical().id_salt("compact-tools").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                row(ui);
-            });
-        });
+        egui::ScrollArea::vertical().id_salt("compact-tools").scroll_source(drag).scroll_bar_visibility(hidden).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    row(ui);
+                });
+            },
+        );
     } else {
-        egui::ScrollArea::horizontal().id_salt("compact-tools").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                row(ui);
-            });
-        });
+        egui::ScrollArea::horizontal().id_salt("compact-tools").scroll_source(drag).scroll_bar_visibility(hidden).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    row(ui);
+                });
+            },
+        );
     }
 }
 
