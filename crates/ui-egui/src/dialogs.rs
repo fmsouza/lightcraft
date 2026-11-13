@@ -1191,7 +1191,86 @@ fn label_names_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
 }
 
 /// The body of the Rename dialog.
+/// Rename on a phone, as its file apps have it: one photo gets a Name field holding its name; more
+/// get a list of name formats (Custom shows the template), a stepper for the first number when
+/// the names are numbered, and the preview as a list.
+fn rename_phone_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
+    let Dialog::Rename { template, start } = dlg else { return };
+    use crate::panels::settings::heading;
+    let ids = app.session.selected();
+    let w = ui.available_width() - 2.0;
+    let caption = |ui: &mut egui::Ui, text: &str| {
+        ui.label(egui::RichText::new(crate::i18n::tr(text).to_uppercase()).font(t.font(14.0)).color(t.text_dim));
+    };
+    if ids.len() == 1 {
+        // the field starts with the photo's own name (the extension stays as it is)
+        if just_opened(ui, "renamePhoneName") && template == "{name}" {
+            let name = app.session.catalog.photo(ids[0]).map(|p| p.file_name.clone());
+            if let Some(stem) = name.as_deref().and_then(|n| std::path::Path::new(n).file_stem()).and_then(|s| s.to_str()) {
+                *template = stem.replace('{', "(").replace('}', ")");
+            }
+        }
+        caption(ui, "Name");
+        crate::text_field::TextField::singleline("field:renameTemplate", template).hint(crate::i18n::tr("Name")).width(w).show(ui);
+    } else {
+        caption(ui, "Name format");
+        const FORMATS: [(&str, &str); 3] = [("Original Name", "{name}"), ("Date and Name", "{date}_{name}"), ("Title and Number", "{title}-{seq:3}")];
+        let custom = !FORMATS.iter().any(|(_, f)| template == f);
+        for (i, (label, f)) in FORMATS.iter().enumerate() {
+            if crate::panels::settings::tick_row(ui, &format!("renamePreset-{i}"), crate::i18n::tr(label), template == f) {
+                *template = f.to_string();
+            }
+        }
+        if crate::panels::settings::tick_row(ui, "renamePreset-custom", crate::i18n::tr("Custom"), custom) && !custom {
+            *template = "Photo-{seq:3}".into();
+        }
+        if custom {
+            crate::text_field::TextField::singleline("field:renameTemplate", template).hint("{name}").width(w).show(ui);
+            ui.label(egui::RichText::new("{name}  {date}  {title}  {seq:3}").font(t.font(13.0)).color(t.text_dim));
+        }
+    }
+    if template.contains("{seq") {
+        heading(ui, t, "Start at");
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(start.to_string()).font(t.font(16.0)).color(t.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::widgets::text_button(ui, "renameStartUp", "+", false).clicked() {
+                    *start = start.saturating_add(1).min(999_999);
+                }
+                if crate::widgets::text_button(ui, "renameStartDown", "−", false).clicked() {
+                    *start = start.saturating_sub(1);
+                }
+            });
+        });
+    }
+    heading(ui, t, "Preview");
+    let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize);
+    match &preview {
+        Some(rows) => {
+            for pl in rows {
+                ui.label(egui::RichText::new(&pl.to).font(t.font(16.0)).color(t.text));
+                ui.label(egui::RichText::new(&pl.from).font(t.font(13.0)).color(t.text_dim));
+                ui.add_space(4.0);
+            }
+        }
+        None => {
+            ui.horizontal(|ui| {
+                crate::progress::spinner(ui, 12.0);
+                ui.label(egui::RichText::new(crate::i18n::tr("Checking names…")).color(t.text_dim));
+            });
+        }
+    }
+    let more = total.saturating_sub(RENAME_PREVIEW_ROWS);
+    if more > 0 {
+        ui.label(egui::RichText::new(crate::i18n::tr_format!("… and {more} more", more = more)).color(t.text_dim));
+    }
+}
+
 fn rename_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
+    if crate::panels::settings::phone_list(ui) {
+        rename_phone_body(app, ui, t, dlg);
+        return;
+    }
     let Dialog::Rename { template, start } = dlg else { return };
     let n = app.session.selected().len();
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));

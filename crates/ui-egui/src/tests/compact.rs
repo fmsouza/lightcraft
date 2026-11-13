@@ -2311,3 +2311,45 @@ fn phone_long_press_on_the_photo_shows_the_original_not_a_menu() {
     assert_eq!(h.app.ui.before_after, before, "back once the finger lifts");
     assert!(widget(&h, "panel:contextSheet").is_none());
 }
+
+#[test]
+fn phone_rename_is_a_name_field_for_one_photo_and_formats_for_more() {
+    use crate::state::Dialog;
+    let mut h = editor_phone_for_shots();
+    let template = |h: &Headless| match &h.app.ui.dialog {
+        Some(Dialog::Rename { template, .. }) => template.clone(),
+        _ => String::new(),
+    };
+    // one photo: its name, ready to change
+    assert!(h.app.run("dialog.rename", json!({})).is_ok());
+    for _ in 0..60 {
+        h.step();
+    }
+    shot(&mut h, "rename-one.png");
+    assert!(widget(&h, "field:renameTemplate").is_some(), "a Name field");
+    let name = template(&h);
+    assert!(!name.is_empty() && !name.contains('{'), "it holds the photo's name: {name}");
+    assert!(widget(&h, "button:renamePreset-0").is_none(), "no formats for one photo");
+    h.app.ui.dialog = None;
+    h.step();
+    // several: name formats as a list, the template only under Custom
+    let _ = h.request("engine.execute", json!({"command": "library.selectAll", "params": {}}), T);
+    assert!(h.app.run("dialog.rename", json!({})).is_ok());
+    for _ in 0..60 {
+        h.step();
+    }
+    shot(&mut h, "rename-many.png");
+    let row = widget(&h, "button:renamePreset-1").expect("Date and Name as a row");
+    assert!(row.height() >= 44.0 && row.width() > PHONE[0] * 0.8, "{row:?}");
+    assert!(widget(&h, "field:renameTemplate").is_none(), "no template until Custom");
+    click(&mut h, "button:renamePreset-custom");
+    assert!(widget(&h, "field:renameTemplate").is_some(), "Custom shows the template");
+    assert!(template(&h).contains("{seq"), "{}", template(&h));
+    let start = |h: &Headless| match &h.app.ui.dialog {
+        Some(Dialog::Rename { start, .. }) => *start,
+        _ => 0,
+    };
+    let was = start(&h);
+    click(&mut h, "button:renameStartUp");
+    assert_eq!(start(&h), was + 1, "the stepper counts up");
+}
