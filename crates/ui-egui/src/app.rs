@@ -682,6 +682,9 @@ impl LightcraftApp {
         // when the insets change, as when the soft keyboard comes up
         let mut inner = ui.new_child(egui::UiBuilder::new().id_salt("safe-area").max_rect(content));
         self.layout(&mut inner);
+        if self.ui.settings.show_touches {
+            crate::touch_marks::show_touches(ui.ctx());
+        }
     }
 
     fn layout(&mut self, ui: &mut egui::Ui) {

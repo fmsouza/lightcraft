@@ -2375,5 +2375,8 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "Touch": "Kosketus",
+  "Show touches": "Näytä kosketukset",
+  "A dot where a finger is and a ring where it lifted, for screen recordings.": "Piste sormen kohdalla ja rengas siinä, mistä se nousi, näytön tallennuksia varten."
 }

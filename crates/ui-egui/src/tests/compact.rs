@@ -2491,3 +2491,33 @@ fn phone_tap_that_shows_the_bars_draws_them_without_waiting_for_another_wake() {
         );
     }
 }
+
+#[test]
+fn phone_show_touches_marks_a_finger_and_where_it_lifted() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    touch_screen(&mut h);
+    let at = loupe(&h).center();
+    let mark = |h: &Headless, filled: bool| {
+        h.view.painted_shapes().iter().any(|s| match s {
+            egui::epaint::Shape::Circle(c) if c.center == at => filled == (c.fill.a() > 0),
+            _ => false,
+        })
+    };
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.input([finger(1, egui::TouchPhase::Start, at), egui::Event::PointerMoved(at), button(true)]);
+    h.step();
+    assert!(!mark(&h, true), "off by default");
+    h.input([finger(1, egui::TouchPhase::End, at), button(false), egui::Event::PointerGone]);
+    h.wait(1.0);
+    h.step();
+    h.app.ui.settings.show_touches = true;
+    h.input([finger(2, egui::TouchPhase::Start, at), egui::Event::PointerMoved(at), button(true)]);
+    h.step();
+    assert!(mark(&h, true), "a dot under the finger");
+    h.input([finger(2, egui::TouchPhase::End, at), button(false), egui::Event::PointerGone]);
+    h.step();
+    assert!(mark(&h, false), "a ring where it lifted");
+    h.wait(0.6);
+    h.step();
+    assert!(!mark(&h, false) && !mark(&h, true), "gone after half a second");
+}

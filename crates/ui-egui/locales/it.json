@@ -2575,5 +2575,8 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "Touch": "Tocco",
+  "Show touches": "Mostra i tocchi",
+  "A dot where a finger is and a ring where it lifted, for screen recordings.": "Un punto dove si trova il dito e un anello dove è stato sollevato, per le registrazioni dello schermo."
 }

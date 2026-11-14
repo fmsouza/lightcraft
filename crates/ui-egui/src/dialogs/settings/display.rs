@@ -124,6 +124,11 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         "View → View Options chooses the lines Info 1 and Info 2 show."
     };
     hint(ui, t, crate::i18n::tr(options));
+    if super::mobile(app) {
+        heading(ui, t, crate::i18n::tr("Touch"));
+        check(ui, "settings.showTouches", &mut app.ui.settings.show_touches, "Show touches");
+        hint(ui, t, crate::i18n::tr("A dot where a finger is and a ring where it lifted, for screen recordings."));
+    }
 }
 
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and

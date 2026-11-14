@@ -2409,5 +2409,8 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "Touch": "Tacto",
+  "Show touches": "Mostrar toques",
+  "A dot where a finger is and a ring where it lifted, for screen recordings.": "Un punto donde está el dedo y un anillo donde se levantó, para grabaciones de pantalla."
 }

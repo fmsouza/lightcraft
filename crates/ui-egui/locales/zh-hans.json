@@ -2408,5 +2408,8 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Touch": "触控",
+  "Show touches": "显示触控",
+  "A dot where a finger is and a ring where it lifted, for screen recordings.": "在手指所在处显示圆点，在抬起处显示圆环，用于屏幕录制。"
 }
