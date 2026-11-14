@@ -3,6 +3,10 @@
 //! for a piece of text in another script (Hiragino for Japanese, PingFang for Chinese, Apple SD
 //! Gothic Neo for Korean, SF Georgian …); each file is mapped read-only, so its pages stay the
 //! system's clean, droppable file pages, not app memory.
+//!
+//! Gotcha: the system's own UI fonts can keep their outlines in Apple's `hvgl` table (iOS 26's
+//! PingFang UI does), which egui can't draw: every kanji and hanzi came out blank. A font without
+//! TrueType or CFF outlines is passed over for the named fonts of [`NAMED`].
 #![allow(unsafe_code)] // CoreText calls and a read-only mmap
 
 use std::path::{Path, PathBuf};
@@ -25,6 +29,14 @@ const SAMPLES: &[(&str, &str)] = &[
     ("Հայերեն", "Armn"),
 ];
 
+/// Fonts asked for by name when the system's pick for a script can't be drawn (see the module
+/// note): Hiragino Sans for Japanese, PingFang or Heiti for Chinese.
+const NAMED: &[(&str, &[&str])] = &[
+    ("Jpan", &["HiraginoSans-W3", "HiraginoKakuGothicProN-W3"]),
+    ("Hans", &["PingFangSC-Regular", "STHeitiSC-Light", "HiraginoSansGB-W3"]),
+    ("Hant", &["PingFangTC-Regular", "STHeitiTC-Light"]),
+];
+
 /// Use the system's fonts: its UI font first, the others as fallbacks for their scripts.
 pub fn install() {
     // SAFETY: CoreText's documented constructor for the system UI font; size 0 = the default
@@ -32,21 +44,41 @@ pub fn install() {
     if let Some((bytes, index)) = face(&ui) {
         lightcraft_ui_egui::theme::set_primary_font(bytes, index);
     }
-    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut seen: Vec<(PathBuf, u32)> = Vec::new();
     for (text, script) in SAMPLES {
         let s = CFString::from_str(text);
         let range = CFRange { location: 0, length: s.length() };
         // SAFETY: a valid font, string and a range within it
-        let font = unsafe { ui.for_string(&s, range) };
-        let Some(path) = path_of(&font) else { continue };
-        if seen.contains(&path) {
+        let picked = unsafe { ui.for_string(&s, range) };
+        let named = NAMED.iter().filter(|(sc, _)| sc == script).flat_map(|(_, names)| names.iter()).map(|name| {
+            // SAFETY: CoreText's constructor by name; size 0 = the default, no matrix
+            unsafe { CTFont::with_name(&CFString::from_str(name), 0.0, std::ptr::null()) }
+        });
+        let found = std::iter::once(picked).chain(named).find_map(|font| {
+            let path = path_of(&font)?;
+            let (bytes, index) = face(&font)?;
+            drawable(bytes, index, text).then_some((path, bytes, index))
+        });
+        let Some((path, bytes, index)) = found else {
+            log::warn!("no system font the app can draw {script} with");
+            continue;
+        };
+        log::info!("system font for {script}: {} face {index}", path.display());
+        if seen.contains(&(path.clone(), index)) {
             continue;
         }
-        seen.push(path.clone());
-        if let Some((bytes, index)) = face(&font) {
-            lightcraft_ui_egui::theme::add_script_fallback_font(&format!("system {script}"), bytes, index, script);
-        }
+        seen.push((path, index));
+        lightcraft_ui_egui::theme::add_script_fallback_font(&format!("system {script}"), bytes, index, script);
     }
+}
+
+/// Whether egui can draw `text` with face `index` of `bytes`: TrueType or CFF outlines (not only
+/// Apple's `hvgl`), and a glyph for each character.
+fn drawable(bytes: &[u8], index: u32, text: &str) -> bool {
+    let Ok(f) = ttf_parser::Face::parse(bytes, index) else { return false };
+    let outlines = [b"glyf", b"CFF ", b"CFF2"].iter().any(|t| f.raw_face().table(ttf_parser::Tag::from_bytes(t)).is_some());
+    // (punctuation and spaces may come from another font)
+    outlines && text.chars().filter(|c| c.is_alphabetic()).all(|c| f.glyph_index(c).is_some())
 }
 
 /// The file `font` is in.
