@@ -27,12 +27,18 @@ thread_local! {
     /// For each button on screen: where it is (egui points) and the items its menu shows when it
     /// next opens.
     static LATEST: RefCell<HashMap<&'static str, (egui::Rect, Arc<Vec<NativeItem>>)>> = RefCell::new(HashMap::new());
+    /// The last request carried out in full (every button made): the same one again changes nothing.
+    static DONE: RefCell<Option<MenuRequest>> = const { RefCell::new(None) };
 }
 
 /// The app's request for this frame (main thread): move each native button over its button, and
 /// hide the ones whose buttons aren't on screen.
 pub fn update(request: MenuRequest, ctx: &egui::Context) {
     let Some(mtm) = MainThreadMarker::new() else { return };
+    // most frames ask for what the last one did: nothing to move, hide or hand over
+    if DONE.with_borrow(|d| d.as_ref() == Some(&request)) {
+        return;
+    }
     BUTTONS.with_borrow(|buttons| {
         for (key, button) in buttons {
             if !request.iter().any(|r| r.key == *key) {
@@ -41,9 +47,12 @@ pub fn update(request: MenuRequest, ctx: &egui::Context) {
         }
     });
     LATEST.with_borrow_mut(|l| l.retain(|key, _| request.iter().any(|r| r.key == *key)));
-    for r in request {
-        place(mtm, r, ctx);
+    for r in &request {
+        place(mtm, r.clone(), ctx);
     }
+    // a button not made yet (no view to put it on) is tried again next frame
+    let all_made = BUTTONS.with_borrow(|b| request.iter().all(|r| b.contains_key(r.key)));
+    DONE.set(all_made.then_some(request));
 }
 
 /// Put `r`'s native button over it (made the first time).

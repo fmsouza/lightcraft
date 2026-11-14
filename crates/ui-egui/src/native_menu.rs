@@ -85,7 +85,8 @@ pub(crate) fn run_picks(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// End of frame: tell the host where "…" is and what its menu holds (rebuilt at most every
-/// 0.3 s: the menus change with the screen, never faster than a person opens one).
+/// 0.3 s: the menus change with the screen, never faster than a person opens one). Asks for no
+/// frames of its own once the screen is idle.
 pub(crate) fn sync(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.services.menu_button.is_none() {
         return;
@@ -109,11 +110,16 @@ pub(crate) fn sync(app: &mut LightcraftApp, ctx: &egui::Context) {
             let now = ctx.input(|i| i.time);
             let cache = egui::Id::unique("native-more-items");
             let items = match ctx.data(|d| d.get_temp::<(f64, bool, Arc<Vec<NativeItem>>)>(cache)) {
-                Some((at, editor, items)) if editor == p.editor && now - at < 0.3 => items,
+                Some((at, editor, items)) if editor == p.editor && now - at < 0.3 => {
+                    // this frame may have changed what the menu holds: one more frame when the
+                    // cache runs out takes it in (a fresh rebuild asks for none, so an idle
+                    // screen stops drawing)
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64((at + 0.3 - now).max(0.0)));
+                    items
+                }
                 _ => {
                     let items = Arc::new(more_items(app, p.editor));
                     ctx.data_mut(|d| d.insert_temp(cache, (now, p.editor, items.clone())));
-                    ctx.request_repaint_after(std::time::Duration::from_millis(300));
                     items
                 }
             };

@@ -397,6 +397,12 @@ impl Headless {
         self.view.painted_text()
     }
 
+    /// Let `seconds` pass with no frames (a host that waits for the next repaint it was asked for).
+    #[cfg(test)]
+    pub(crate) fn wait(&mut self, seconds: f64) {
+        self.time += seconds;
+    }
+
     /// `app.quit` was requested.
     pub fn quit_requested(&self) -> bool {
         self.quit

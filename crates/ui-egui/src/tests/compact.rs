@@ -2353,3 +2353,18 @@ fn phone_rename_is_a_name_field_for_one_photo_and_formats_for_more() {
     click(&mut h, "button:renameStartUp");
     assert_eq!(start(&h), was + 1, "the stepper counts up");
 }
+
+#[test]
+fn phone_with_the_hosts_menu_goes_idle() {
+    let (mut h, _seen) = native_menu_phone();
+    // a host that draws only when asked and waits out each delay: the "…" menu's cache asks for
+    // at most one more frame once it runs out (0.3 s), never a frame every 0.3 s forever
+    // (egui reports a frame's repaint causes on the frame after it)
+    let mut asked = 0;
+    for _ in 0..10 {
+        h.wait(0.3);
+        h.step();
+        asked += usize::from(h.view.ctx.repaint_causes().iter().any(|c| c.file.ends_with("native_menu.rs")));
+    }
+    assert!(asked <= 2, "the menu kept the screen drawing ({asked} of 10 frames)");
+}
