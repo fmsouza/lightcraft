@@ -355,15 +355,16 @@ pub fn note_pointer(ctx: &egui::Context) {
     double_tap_options(ctx);
 }
 
-/// Longest time between the two taps of a double tap (release to press, s).
-const DOUBLE_TAP: f64 = 0.5;
+/// Longest time between the two taps of a double tap (release to press, s). A single tap on the
+/// photo waits this long before it hides or shows the editor's bars, so it is kept short.
+const DOUBLE_TAP: f64 = 0.3;
 
 /// How far apart the two taps of a double tap may land (points).
 const DOUBLE_TAP_DIST: f32 = 24.0;
 
 /// egui counts a double click when the second click lands within `max_click_dist` (6 pt) of the
 /// first and within `max_double_click_delay` (0.3 s): a mouse makes that, fingers seldom do (they
-/// land a few points apart, and tap slower). With a finger the delay is [`DOUBLE_TAP`], and for
+/// land a few points apart). With a finger the delay is [`DOUBLE_TAP`], and for
 /// that long after a tap the distance is [`DOUBLE_TAP_DIST`], so every `double_clicked()` takes a
 /// double tap. Only then: `max_click_dist` is also how far a press moves before it is a drag, and
 /// a larger one at other times would make a finger's scroll start late. A mouse keeps egui's

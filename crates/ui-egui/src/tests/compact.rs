@@ -402,7 +402,7 @@ fn phone_tap_hides_the_editor_and_double_tap_zooms_to_100_and_back() {
         let c = loupe(h).center();
         touch_drag(h, c, c, 0);
     };
-    // the time for a second tap (0.5 s), then the photo's glide to its new room (0.22 s)
+    // the time for a second tap (0.3 s), then the photo's glide to its new room (0.22 s)
     let wait = |h: &mut Headless| {
         for _ in 0..60 {
             h.step();
@@ -2395,7 +2395,7 @@ fn phone_still_finger_on_the_photo_shows_the_original_without_other_frames() {
     h.step();
     h.input([finger(1, egui::TouchPhase::End, at), button(false), egui::Event::PointerGone]);
     h.step();
-    // (the time for a second tap: 0.5 s with a finger)
+    // (the time for a second tap: 0.3 s with a finger)
     assert!(!crate::panels::compact::chrome_hidden(&h.view.ctx), "not before a second tap could come");
     h.wait(0.5);
     h.step();
