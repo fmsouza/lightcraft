@@ -380,6 +380,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !fullscreen {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
+    crate::panels::edit::histogram_overlay(app, ui, canvas, id);
     loupe_context_menu(app, &resp, id);
 }
 
@@ -1150,15 +1151,17 @@ fn phone_taps(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, zoom: b
         app.ui.zoom_anim = true;
         return;
     }
-    if resp.clicked() {
+    // (the lift that ends a hold on the photo isn't a tap)
+    if resp.clicked() && !crate::panels::compact::holding_original(ctx) {
         ctx.data_mut(|d| d.insert_temp(pending, now));
     }
     match ctx.data(|d| d.get_temp::<f64>(pending)) {
-        Some(at) if now - at > wait => {
+        Some(at) if now - at >= wait => {
             ctx.data_mut(|d| d.remove_temp::<f64>(pending));
             crate::panels::compact::toggle_chrome(ctx);
         }
-        Some(_) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait)),
+        // woken when the time for a second tap is up, not a whole wait after this frame
+        Some(at) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait - (now - at))),
         None => {}
     }
 }

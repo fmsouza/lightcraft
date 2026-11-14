@@ -2368,3 +2368,49 @@ fn phone_with_the_hosts_menu_goes_idle() {
     }
     assert!(asked <= 2, "the menu kept the screen drawing ({asked} of 10 frames)");
 }
+
+#[test]
+fn phone_still_finger_on_the_photo_shows_the_original_without_other_frames() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "none"}));
+    touch_screen(&mut h);
+    let at = h.app.canvas_rect.expect("the photo's room").center();
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.input([finger(1, egui::TouchPhase::Start, at), egui::Event::PointerMoved(at), button(true)]);
+    h.step();
+    // a finger that doesn't move sends nothing: the next frame is the one the app asked for
+    assert!(h.view.ctx.has_requested_repaint(), "a frame is asked for to see the hold");
+    h.wait(0.4);
+    h.step();
+    assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::Original, "the photo as shot while the finger rests");
+    h.input([finger(1, egui::TouchPhase::End, at), button(false), egui::Event::PointerGone]);
+    h.step();
+    h.wait(0.5);
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::Off, "back once it lifts");
+    assert!(!crate::panels::compact::chrome_hidden(&h.view.ctx), "the lift ending a hold isn't a tap");
+    // a quick tap still hides the bars, once the time for a second tap is up
+    h.input([finger(1, egui::TouchPhase::Start, at), egui::Event::PointerMoved(at), button(true)]);
+    h.step();
+    h.input([finger(1, egui::TouchPhase::End, at), button(false), egui::Event::PointerGone]);
+    h.step();
+    // (the time for a second tap: 0.5 s with a finger)
+    assert!(!crate::panels::compact::chrome_hidden(&h.view.ctx), "not before a second tap could come");
+    h.wait(0.5);
+    h.step();
+    assert!(crate::panels::compact::chrome_hidden(&h.view.ctx), "a tap hides the bars");
+    assert_eq!(h.app.ui.before_after, crate::state::BeforeAfter::Off, "a tap isn't a hold");
+}
+
+#[test]
+fn phone_histogram_is_over_the_photo() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    // on by default, as on the desktop (View > Histogram)
+    let over = widget(&h, "histogramOverlay").expect("the histogram over the photo");
+    let canvas = h.app.canvas_rect.expect("the photo's room");
+    assert!(canvas.contains_rect(over), "in the photo's room: {over:?} {canvas:?}");
+    assert!(widget(&h, "histogram").is_none(), "not again above the sheet's sliders");
+    assert!(h.app.run("view.histogram", json!({})).is_ok());
+    h.step();
+    assert!(widget(&h, "histogramOverlay").is_none(), "View > Histogram takes it off");
+}

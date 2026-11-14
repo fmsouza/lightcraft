@@ -529,21 +529,58 @@ fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
-/// A long press on the photo in the editor: the photo as shot until the finger lifts (the view it
-/// replaced comes back then), as the Show Original button does.
+/// How long a finger rests on the photo before it shows the photo as shot (shorter than egui's
+/// long press, 0.8 s, which also only fires on a frame that something else wakes).
+const HOLD_ORIGINAL: f64 = 0.35;
+/// How far a resting finger may drift and still be holding (points), past which it is a swipe or
+/// a pan.
+const HOLD_SLOP: f32 = 10.0;
+
+fn hold_photo_id() -> egui::Id {
+    egui::Id::unique("compact-hold-photo-original")
+}
+
+/// A finger is holding the photo as shot ([`hold_original_on_photo`]): its lift is the end of the
+/// hold, not a tap.
+pub(crate) fn holding_original(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<crate::state::BeforeAfter>(hold_photo_id())).is_some()
+}
+
+/// One finger resting on the photo in the editor: the photo as shot until it lifts (the view it
+/// replaced comes back then), as the Show Original button does. Followed from the pointer, not
+/// egui's long press: a still finger sends no events, so the frame that shows it is asked for here.
 pub(crate) fn hold_original_on_photo(app: &mut LightcraftApp, resp: &egui::Response) {
-    let key = egui::Id::unique("compact-hold-photo-original");
-    let was: Option<crate::state::BeforeAfter> = resp.ctx.data(|d| d.get_temp(key));
-    match was {
-        None if resp.long_touched() => {
-            resp.ctx.data_mut(|d| d.insert_temp(key, app.ui.before_after));
-            app.ui.before_after = crate::state::BeforeAfter::Original;
-        }
-        Some(before) if !resp.ctx.input(|i| i.pointer.any_down() || i.any_touches()) => {
-            resp.ctx.data_mut(|d| d.remove::<crate::state::BeforeAfter>(key));
+    let ctx = &resp.ctx;
+    let key = hold_photo_id();
+    let (down, touches, pinch, start, origin, pos, now) = ctx.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.any_touches(),
+            i.multi_touch().is_some(),
+            i.pointer.press_start_time(),
+            i.pointer.press_origin(),
+            i.pointer.latest_pos(),
+            i.time,
+        )
+    });
+    if let Some(before) = ctx.data(|d| d.get_temp::<crate::state::BeforeAfter>(key)) {
+        if !down && !touches {
+            ctx.data_mut(|d| d.remove::<crate::state::BeforeAfter>(key));
             app.ui.before_after = before;
         }
-        _ => {}
+        return;
+    }
+    let (Some(start), Some(origin)) = (start, origin) else { return };
+    let resting = down && touches && !pinch && resp.rect.contains(origin) && pos.is_none_or(|p| p.distance(origin) <= HOLD_SLOP);
+    if !resting {
+        return;
+    }
+    let held = now - start;
+    if held >= HOLD_ORIGINAL {
+        ctx.data_mut(|d| d.insert_temp(key, app.ui.before_after));
+        app.ui.before_after = crate::state::BeforeAfter::Original;
+    } else {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(HOLD_ORIGINAL - held));
     }
 }
 
