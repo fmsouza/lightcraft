@@ -1,4 +1,4 @@
-use super::*;
+use super::{Session, Value, pick};
 
 pub type PickFiles = Box<dyn FnMut() -> Vec<String>>;
 
@@ -49,6 +49,15 @@ pub type ShareFn = Box<dyn FnMut(&[String])>;
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
 /// last heard and wakes the UI itself when that changes; it is never polled for changes.
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
+
+/// What a [`Services::haptic`] knock means; the host picks the system's feedback for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Haptic {
+    /// A long press took effect (Select mode began with the photo under the finger).
+    Press,
+    /// The selection changed under a sliding finger: a photo went in or out.
+    Tick,
+}
 
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
@@ -135,10 +144,27 @@ pub struct Services {
     /// Offer the files of a finished export from the Export dialog (or Export with Preset /
     /// Previous) in the platform's share sheet (mobile hosts).
     pub share: Option<ShareFn>,
+    /// Save files to the device's photo library (mobile hosts: the phone layout's Share sheet
+    /// offers Save to Photos when this is set). Asynchronous: the host reports how it went.
+    pub save_to_photos: Option<ShareFn>,
     /// Import from Folder… starts on Copy (mobile hosts: a folder picked outside the app's own
     /// storage can be read only while the system allows, so files added in place would go
     /// missing).
     pub import_copies: bool,
+    /// A phone or tablet app (iOS, Android): one library in the app's own storage, no folders to
+    /// pick or programs to open with, the system's colour management and GPU. Settings that only
+    /// make sense on a computer are left out there.
+    pub mobile: bool,
+    /// The phone's "…" as the system's menu ([`crate::native_menu`]): called at the end of each
+    /// frame with where "…" is and what its menu holds, or `None` to take the native button away.
+    pub menu_button: Option<Box<dyn FnMut(crate::native_menu::MenuRequest)>>,
+    /// The phone's "…" as the system's popup menu, opened when it is tapped (Android): where "…"
+    /// is (egui points) and what its menu holds; picks come back through
+    /// [`crate::native_menu::pick`].
+    pub open_menu: Option<Box<dyn FnMut(egui::Rect, &[crate::native_menu::NativeItem])>>,
+    /// The device's haptics: a light knock where a finger's action took effect without much to
+    /// see under it (a long press selecting a photo, a slide adding one).
+    pub haptic: Option<Box<dyn FnMut(Haptic)>>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
 }

@@ -78,6 +78,10 @@ pub enum Icon {
     Flip,
     Invert,
     Dots,
+    /// iOS's "…": three dots in a circle.
+    DotsCircle,
+    /// Android's "…": three dots stacked.
+    DotsVertical,
     Video,
     Heart,
     Edited,
@@ -336,6 +340,17 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
         More | Dots => {
             for x in [5.0, 10.0, 15.0] {
                 pen.dot(x, 10.0, 1.3);
+            }
+        }
+        DotsCircle => {
+            pen.circle(10.0, 10.0, 8.0);
+            for x in [6.5, 10.0, 13.5] {
+                pen.dot(x, 10.0, 1.1);
+            }
+        }
+        DotsVertical => {
+            for y in [4.5, 10.0, 15.5] {
+                pen.dot(10.0, y, 1.5);
             }
         }
         Tag => {

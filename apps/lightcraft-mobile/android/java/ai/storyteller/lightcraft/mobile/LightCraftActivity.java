@@ -2,16 +2,33 @@ package ai.storyteller.lightcraft.mobile;
 
 import android.app.NativeActivity;
 import android.content.ClipData;
+import android.content.ContentValues;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.webkit.MimeTypeMap;
+import android.graphics.Color;
+import android.text.SpannableString;
+import android.text.style.ForegroundColorSpan;
+import android.view.ContextThemeWrapper;
+import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.SubMenu;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.PopupMenu;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import android.view.inputmethod.InputMethodManager;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -38,6 +55,19 @@ import java.util.List;
  * file being copied: what was copied so far is delivered.
  */
 public class LightCraftActivity extends NativeActivity {
+    /**
+     * Phones stay upright, as phone photo editors do (held sideways the notch or camera cuts
+     * into the photo, and the layout is made for portrait); tablets turn freely. A phone is a
+     * screen under 600 dp on its shortest side.
+     */
+    @Override
+    protected void onCreate(Bundle state) {
+        if (getResources().getConfiguration().smallestScreenWidthDp < 600) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        }
+        super.onCreate(state);
+    }
+
     private static final int PICK = 0x4c43;
     private static final int DOCS = 0x4c44;
     private static final int TREE = 0x4c45;
@@ -168,6 +198,239 @@ public class LightCraftActivity extends NativeActivity {
             @Override
             public void run() {
                 startActivity(Intent.createChooser(send, null));
+            }
+        });
+    }
+
+    /** How the last saves to the gallery went ("N" photos saved, or "!why"), taken by {@link #takeSaved}. */
+    private final ArrayList<String> saved = new ArrayList<>();
+
+    /**
+     * Save exported files (newline-separated paths) to the gallery, in Pictures/LightCraft, on a
+     * worker thread. MediaStore needs no permission for that from Android 10; older versions are
+     * told to use Share instead.
+     */
+    public void saveToGallery(final String joined) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String result;
+                if (Build.VERSION.SDK_INT < 29) {
+                    result = "!Saving to the gallery needs Android 10 or later: use Share instead";
+                } else {
+                    int n = 0;
+                    String error = null;
+                    for (String path : joined.split("\n")) {
+                        if (path.isEmpty() || path.endsWith(".xmp")) continue;
+                        try {
+                            addToGallery(new File(path));
+                            n++;
+                        } catch (Exception e) {
+                            error = e.getMessage();
+                        }
+                    }
+                    result = error == null ? Integer.toString(n) : "!" + error;
+                }
+                synchronized (saved) {
+                    saved.add(result);
+                }
+                nativeWake();
+            }
+        }).start();
+    }
+
+    private void addToGallery(File file) throws Exception {
+        String name = file.getName();
+        String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase() : "";
+        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        ContentValues v = new ContentValues();
+        v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+        v.put(MediaStore.Images.Media.MIME_TYPE, mime == null ? "image/*" : mime);
+        v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/LightCraft");
+        v.put(MediaStore.Images.Media.IS_PENDING, 1);
+        Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+        if (uri == null) throw new Exception("the gallery refused " + name);
+        try (InputStream in = new java.io.FileInputStream(file); OutputStream os = getContentResolver().openOutputStream(uri)) {
+            if (os == null) throw new java.io.IOException("the gallery can't be written");
+            byte[] buf = new byte[1 << 16];
+            for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+        } catch (Exception e) {
+            getContentResolver().delete(uri, null, null);
+            throw e;
+        }
+        v.clear();
+        v.put(MediaStore.Images.Media.IS_PENDING, 0);
+        getContentResolver().update(uri, v, null, null);
+    }
+
+    /** The saves finished since the last call, newline-separated (empty: none). */
+    public String takeSaved() {
+        synchronized (saved) {
+            StringBuilder b = new StringBuilder();
+            for (String s : saved) b.append(s).append('\n');
+            saved.clear();
+            return b.toString();
+        }
+    }
+
+    /** "…"'s popup: where the menu hangs from, the commands its items run, what was picked. */
+    private View menuAnchor;
+    private final List<String> menuActions = new ArrayList<String>();
+    private final List<String> menuPicks = new ArrayList<String>();
+    private boolean menuClosed;
+    private boolean submenuOpening;
+
+    private void wakeQuietly() {
+        try {
+            nativeWake();
+        } catch (Throwable ignored) {
+            // not registered yet: the shell polls anyway
+        }
+    }
+
+    /**
+     * "…" was tapped: the system's popup menu, its right edge under ({@code x}, {@code y}) in
+     * pixels. {@code json}: the items (see {@code native_menu::to_json}): sections become groups
+     * between dividers, submenus open as the system's, picks wait for {@link #takeMenuPicks}.
+     */
+    public void showMenu(final float x, final float y, final String json) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (menuAnchor == null) {
+                        menuAnchor = new View(LightCraftActivity.this);
+                        addContentView(menuAnchor, new ViewGroup.LayoutParams(1, 1));
+                    }
+                    menuAnchor.setX(x - 1);
+                    menuAnchor.setY(y);
+                    // the device's own look for the menu (One UI on a Samsung, light or dark as
+                    // the phone is set): the activity's Theme.Black would draw it as Android 2 did
+                    int theme = Build.VERSION.SDK_INT >= 29
+                            ? android.R.style.Theme_DeviceDefault_DayNight
+                            : android.R.style.Theme_DeviceDefault;
+                    PopupMenu popup = new PopupMenu(new ContextThemeWrapper(LightCraftActivity.this, theme), menuAnchor, Gravity.END);
+                    Menu menu = popup.getMenu();
+                    if (Build.VERSION.SDK_INT >= 28) menu.setGroupDividerEnabled(true);
+                    synchronized (menuPicks) {
+                        menuActions.clear();
+                        menuPicks.clear();
+                        menuClosed = false;
+                    }
+                    addItems(menu, new JSONArray(json), new int[] {0}, 0);
+                    popup.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
+                        @Override
+                        public boolean onMenuItemClick(MenuItem item) {
+                            if (item.hasSubMenu()) {
+                                submenuOpening = true;
+                                return false;
+                            }
+                            int i = item.getItemId() - 1;
+                            synchronized (menuPicks) {
+                                if (i >= 0 && i < menuActions.size()) menuPicks.add(menuActions.get(i));
+                            }
+                            wakeQuietly();
+                            return true;
+                        }
+                    });
+                    popup.setOnDismissListener(new PopupMenu.OnDismissListener() {
+                        @Override
+                        public void onDismiss(PopupMenu m) {
+                            // (the first menu closes as a submenu opens: not the end yet)
+                            if (submenuOpening) {
+                                submenuOpening = false;
+                                return;
+                            }
+                            synchronized (menuPicks) {
+                                menuClosed = true;
+                            }
+                            wakeQuietly();
+                        }
+                    });
+                    popup.show();
+                } catch (Exception e) {
+                    synchronized (menuPicks) {
+                        menuClosed = true;
+                    }
+                    wakeQuietly();
+                }
+            }
+        });
+    }
+
+    /** The items of {@code items} into {@code menu}: actions, sections (a group each), submenus. */
+    private void addItems(Menu menu, JSONArray items, int[] group, int inGroup) throws Exception {
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.getJSONObject(i);
+            String t = it.optString("t");
+            if (t.equals("s")) {
+                group[0]++;
+                addItems(menu, it.getJSONArray("items"), group, group[0]);
+                group[0]++;
+            } else if (t.equals("m")) {
+                SubMenu sub = menu.addSubMenu(inGroup, Menu.NONE, Menu.NONE, it.optString("label"));
+                addItems(sub, it.getJSONArray("items"), group, 0);
+            } else {
+                menuActions.add(it.optString("id") + "\t" + it.optString("params", "{}"));
+                CharSequence label = it.optString("label");
+                if (it.optBoolean("destructive")) {
+                    SpannableString red = new SpannableString(label);
+                    red.setSpan(new ForegroundColorSpan(Color.rgb(0xE5, 0x48, 0x4D)), 0, red.length(), 0);
+                    label = red;
+                }
+                MenuItem m = menu.add(inGroup, menuActions.size(), Menu.NONE, label);
+                m.setEnabled(it.optBoolean("enabled", true));
+                if (it.optBoolean("checked")) {
+                    m.setCheckable(true);
+                    m.setChecked(true);
+                }
+            }
+        }
+    }
+
+    /**
+     * What "…"'s menu picked ("id\tparams" each), an empty array once it closed with no pick, or
+     * null while it's still open with nothing picked.
+     */
+    public String[] takeMenuPicks() {
+        synchronized (menuPicks) {
+            if (menuPicks.isEmpty() && !menuClosed) return null;
+            String[] out = menuPicks.toArray(new String[0]);
+            menuPicks.clear();
+            menuClosed = false;
+            return out;
+        }
+    }
+
+    /**
+     * A knock where a finger's action took effect: 0 a long press (the system's long-press
+     * feedback), 1 a selection changing under a slide (a light tick). The window's own view
+     * gives it, so it follows the phone's touch-feedback setting.
+     */
+    public void haptic(final int kind) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                View v = getWindow().getDecorView();
+                int effect = kind == 0
+                        ? HapticFeedbackConstants.LONG_PRESS
+                        : (Build.VERSION.SDK_INT >= 27 ? HapticFeedbackConstants.TEXT_HANDLE_MOVE : HapticFeedbackConstants.CLOCK_TICK);
+                v.performHapticFeedback(effect);
+            }
+        });
+    }
+
+    /** The screen's density now (dpi): it changes with the resolution while the app runs. */
+    public int densityDpi() {
+        return getResources().getConfiguration().densityDpi;
+    }
+
+    /** Back with nowhere to go back to: to the home screen, as the system's own Back does. */
+    public void leave() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                moveTaskToBack(true);
             }
         });
     }

@@ -43,14 +43,17 @@ If `cargo` on `PATH` isn't rustup's, set `CARGO` (for example
 ## Phone layout
 
 Below 600pt of width or 500pt of height (inside the safe area), `lightcraft-ui-egui` switches to
-a compact layout (`crates/ui-egui/src/panels/compact.rs`). It's used on phones in either
-orientation, iPad Split View and phone browsers:
+a compact layout (`crates/ui-egui/src/panels/compact.rs`). It's used on phones, iPad Split View
+and phone browsers. Phones stay in portrait, as phone photo editors do (held sideways the notch
+cuts into the photo): iOS lists only portrait for iPhone (`UISupportedInterfaceOrientations`),
+Android locks portrait when the screen is under 600 dp on its shortest side. iPads and Android
+tablets turn freely; the landscape arrangements below are theirs (and a short browser window's):
 
 - **Top bar:** My Photos, Back, Menu, a search field, Filter and Export.
 - **Detail view:** the photo on top, and a bottom sheet with a tool row (Presets, Edit, Crop,
   Remove, Masking, Info …). The sheet shows that panel at full width; Hide puts it away. In
   landscape the sheet is a column at the right of the photo instead. The histogram is lower
-  than on the desktop, and the filmstrip is lower in landscape.
+  than on the desktop. There is no filmstrip: a swipe on the photo goes to the next or previous one.
 - **My Photos:** a full-width drawer (a column at the left in landscape) that closes when you
   pick a source.
 - **Grid:** about three thumbnails across the screen's short side, so landscape shows more of
@@ -59,7 +62,9 @@ orientation, iPad Split View and phone browsers:
 - **Touch sizes:** on a phone's touch screen buttons, fields, checkboxes and menu items are
   30pt tall (22pt with a mouse). Dialogs span the screen up to 560pt wide and scroll.
 - **Before/After Left/Right** stacks the two views when the photo area is taller than wide.
-- **Bottom bar:** view modes, Sort, Filmstrip and an Edit toggle.
+- **No bottom bar in the library:** a pinch sizes the grid, a tap opens a photo, a long press
+  starts Select mode (whose own bar has Rate, Album, Move and Delete); Filter and Sort sit on the
+  album row.
 - **Loupe gestures:** pinch zooms about the fingers, from Fit to 1600%, and pinching back in
   snaps to Fit. Moving both fingers pans. At Fit, a one-finger swipe sideways drags the photo
   along, and letting go past a sixth of the screen shows the next or previous photo. When
@@ -141,6 +146,16 @@ orientation, iPad Split View and phone browsers:
   over `content://` URIs from a small read-only `FilesProvider` (androidx's FileProvider
   without androidx). `ui-egui` gained two optional host services for this, `export_dir` and
   `share`.
+- **Share sheet (phone layout):** the Share button (the editor's, the library's and Select
+  mode's) opens a sheet of the photos to share, each with a check box (Select all / none), and:
+  **Share**, a full-size sRGB JPEG straight to the system share sheet; **Export as**, a short
+  form (file type: Original, JPG, AVIF, JXL, TIF, PNG, DNG; size; quality; the watermark set in
+  the full Export dialog), whose More options opens that dialog for the chosen photos; and
+  **Save to Photos**, straight into the photo library, its gear setting what is saved. On iOS
+  that's a PhotoKit creation request per file (`src/ios_photos.rs`; add-only access,
+  `NSPhotoLibraryAddUsageDescription`); on Android, MediaStore into `Pictures/LightCraft`
+  (Android 10 and later). The sheet's exports leave Export with Previous as it was.
+  (`panels/share_sheet.rs`; host service `save_to_photos`.)
 - **Hardware keyboard (iPad):** shortcuts work from a Magic Keyboard or any Bluetooth keyboard,
   with ⌘ as the command key (menus show ⌘), plus arrows, Escape and the single-key shortcuts.
   winit 0.30's iOS view only receives typed text, so while no text field has focus a hidden view
@@ -164,12 +179,17 @@ orientation, iPad Split View and phone browsers:
   reach at least 22 pt, a lifted finger still "clicks" menu items, and new linear / radial
   gradients are drawn by dragging on the photo.
 - **What the desktop does with hover, modifiers, drags and keys** has a touch way in:
+  - **The photo grid on a phone** works like a phone's photo library: a tap opens the photo, a
+    long press starts Select mode with that photo chosen, and a sideways slide chooses (or, from
+    a chosen photo, takes out) a run of photos; up or down the grid scrolls. Select mode's bar
+    has Share, Album, Move and Delete. In the full layout (an iPad, a touch laptop) a tap selects,
+    a double tap opens and a long press opens the photo's menu.
   - **Selecting several photos:** Select in the bottom bar (or Edit ▸ Select Several, or
-    "Select Several" in a photo's long-press menu): taps add photos to the selection and take
-    them out, as ⌘-click does, with a tick on each; Done ends it.
-  - **Double taps** do what double clicks do (open a photo, reset a slider, delete a curve
-    point, reset a colour wheel, rename a mask or version …): two taps on the same control
-    within half a second, wherever on it they land.
+    "Select Several" in a photo's long-press menu in the full layout): taps add photos to the
+    selection and take them out, as ⌘-click does, with a tick on each; Done ends it.
+  - **Double taps** do what double clicks do (reset a slider, delete a curve point, reset a
+    colour wheel, rename a mask or version, open a photo in the full layout …): two taps on the
+    same control within half a second, wherever on it they land.
   - **Controls shown on hover** are always there on a touch screen: a section's on/off eye, a
     mask's eye, face boxes' handles, × and "Add name", Survey's ×, a person's "More" tiles, the
     Profile Browser's stars, the Keyword List's arrow.

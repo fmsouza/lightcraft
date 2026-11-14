@@ -1,6 +1,6 @@
 use super::appearance::appearance;
 use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::*;
+use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
 
 // ---------------------------------------------------------------------------------- Interface
 
@@ -78,19 +78,30 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
-    heading(ui, t, crate::i18n::tr("Filmstrip"));
-    check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
-    check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");
+    // (a phone has no filmstrip and no Square Grid)
+    let phone = crate::panels::compact::is_compact(ui.ctx());
+    if !phone {
+        heading(ui, t, crate::i18n::tr("Filmstrip"));
+        check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
+        check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");
+    }
     heading(ui, t, crate::i18n::tr("Grid"));
     row(ui, t, crate::i18n::tr("Ratings & flags"), |ui| {
         choices(
             ui,
             "settingsGridBadges",
-            &[(GridBadges::Auto, "When rated or hovered"), (GridBadges::Always, "Always"), (GridBadges::Never, "Never")],
+            // (a finger doesn't hover: there, the badges show on rated or selected photos)
+            &[
+                (GridBadges::Auto, if phone { "When rated or selected" } else { "When rated or hovered" }),
+                (GridBadges::Always, "Always"),
+                (GridBadges::Never, "Never"),
+            ],
             &mut app.ui.settings.grid_badges,
         );
     });
-    check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
+    if !phone {
+        check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
+    }
     heading(ui, t, crate::i18n::tr("Keywords"));
     row(ui, t, crate::i18n::tr("Keywords of the selection"), |ui| {
         use crate::state::KeywordChips as K;
@@ -107,7 +118,17 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         use crate::state::InfoOverlay as I;
         choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
     });
-    hint(ui, t, crate::i18n::tr("View → View Options chooses the lines Info 1 and Info 2 show."));
+    let options = if phone {
+        "View Options, in a photo's “…”, chooses the lines Info 1 and Info 2 show."
+    } else {
+        "View → View Options chooses the lines Info 1 and Info 2 show."
+    };
+    hint(ui, t, crate::i18n::tr(options));
+    if super::mobile(app) {
+        heading(ui, t, crate::i18n::tr("Touch"));
+        check(ui, "settings.showTouches", &mut app.ui.settings.show_touches, "Show touches");
+        hint(ui, t, crate::i18n::tr("A dot where a finger is and a ring where it lifted, for screen recordings."));
+    }
 }
 
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and
@@ -171,12 +192,30 @@ pub(super) fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &s
     let mut v = value;
     let r = ui.add(egui::Slider::new(&mut v, range).logarithmic(key == "slideDuration").suffix(" s").max_decimals(1));
     register(ui, format!("slider:{id}"), r.rect);
-    if r.changed()
-        && let Ok(next) = app.session.slideshow.merged(&json!({ key: v }))
-    {
+    apply_duration(app, key, v, r.changed(), r.drag_stopped() || (r.changed() && !r.dragged()));
+}
+
+/// [`duration_slider`] upright on a phone: the system's kind of slider, named by `label`.
+pub(super) fn phone_duration_slider(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    (id, label): (&str, &str),
+    key: &str,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+) {
+    let mut v = value;
+    let secs = |v: f64| format!("{v:.1} s");
+    let slid = super::widgets::phone_slider(ui, id, label, &mut v, range, key == "slideDuration", Some(0.1), secs);
+    apply_duration(app, key, v, slid.changed, slid.released);
+}
+
+/// Show a slideshow duration as it moves, and keep it once it is let go.
+fn apply_duration(app: &mut LightcraftApp, key: &str, v: f64, changed: bool, released: bool) {
+    if changed && let Ok(next) = app.session.slideshow.merged(&json!({ key: v })) {
         app.session.slideshow = next;
     }
-    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+    if released {
         let _ = app.run("slideshow.playback", json!({ key: v }));
     }
 }

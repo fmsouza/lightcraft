@@ -1,9 +1,48 @@
+use serde_json::json;
+
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-use super::*;
+use super::{Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Vec2, pos2, register, vec2};
 
 /// The review dialog's largest size (points): it takes as much of the screen as this, so the
 /// photos get the height. It can be resized on the desktop.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [1100.0, 960.0];
+
+pub(crate) const THUMB_SIZE_MIN: f32 = 80.0;
+pub(crate) const THUMB_SIZE_MAX: f32 = 320.0;
+pub(crate) const THUMB_SIZE_DEFAULT: f32 = 116.0;
+
+/// Bound values from saved preferences and the control channel before laying out the grid.
+pub(crate) fn thumb_size(size: f32) -> f32 {
+    if size.is_finite() { size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX) } else { THUMB_SIZE_DEFAULT }
+}
+
+/// A few physical-pixel sizes avoid decoding on every point of a slider drag. The engine caps
+/// candidate previews at 1024 pixels; this covers the largest tile at up to 3× display density.
+pub(crate) fn thumb_edge(size: f32, pixels_per_point: f32) -> usize {
+    let scale = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
+    let pixels = (thumb_size(size) - 8.0) * scale;
+    [192, 384, 512, 768, 1024].into_iter().find(|edge| *edge as f32 >= pixels).unwrap_or(1024)
+}
+
+/// Use the shared control contract for pointer, keyboard, exact-value entry and reset interactions.
+fn thumb_size_slider(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    use lightcraft_develop::controls::{ControlSpec, Section, Track};
+    const SIZE: ControlSpec = ControlSpec {
+        id: "importThumbSize",
+        label: "Thumbnail size",
+        section: Section::Light,
+        min: THUMB_SIZE_MIN as f64,
+        max: THUMB_SIZE_MAX as f64,
+        default: THUMB_SIZE_DEFAULT as f64,
+        step: 1.0,
+        decimals: 0,
+        track: Track::Plain,
+    };
+    let out = crate::widgets::slider(ui, &SIZE, f64::from(thumb_size(app.ui.import_thumb_size)), true, None);
+    if let Some(size) = out.value {
+        let _ = app.run("view.importThumbSize", json!({"size": SIZE.clamp(size)}));
+    }
+}
 
 /// Skipped candidates: (already in the library, identical copies within the source, in Recently
 /// Deleted). Files of photos in Recently Deleted are not "already in the library", and a file with
@@ -41,6 +80,11 @@ const NAME_H: f32 = 20.0;
 /// The buttons' row at the bottom of the options (or of both tabs).
 const FOOTER_H: f32 = 34.0;
 
+/// The footer's height in this ui: room for finger-sized buttons where the controls are (a phone).
+fn footer_h(ui: &egui::Ui) -> f32 {
+    if crate::widgets::finger_ui(ui) { 50.0 } else { FOOTER_H }
+}
+
 pub(crate) fn layout(width: f32) -> Layout {
     if width >= SIDE_MIN_WIDTH { Layout::Side } else { Layout::Tabs }
 }
@@ -57,7 +101,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) ->
     let full = ui.available_rect_before_wrap();
     // (a window that is still sizing itself reports no height: one of the screen's)
     let height = if full.height().is_finite() && full.height() > 1.0 { full.height() } else { window_size(ui.ctx().content_rect().size()).y - 80.0 };
-    let full = Rect::from_min_size(full.min, vec2(full.width(), height.max(CELL + NAME_H + FOOTER_H)));
+    let full = Rect::from_min_size(full.min, vec2(full.width(), height.max(CELL + NAME_H + footer_h(ui))));
     ui.allocate_rect(full, Sense::hover());
     let mut pressed = None;
     let child = |ui: &mut egui::Ui, r: Rect, add: &mut dyn FnMut(&mut egui::Ui)| {
@@ -78,7 +122,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) ->
             });
             ui.painter().vline(right.left() - gap / 2.0, full.y_range(), egui::Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
             child(ui, right, &mut |ui| {
-                options_column(app, ui, d, right);
+                // the thumbnail size heads the options column: above the photos it would cost a
+                // phone held sideways a third of their height
+                thumb_size_slider(app, ui);
+                let rest = Rect::from_min_max(pos2(right.left(), ui.cursor().top()), right.max);
+                options_column(app, ui, d, rest);
                 pressed = footer(ui, d);
             });
         }
@@ -101,7 +149,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) ->
                     options_column(app, ui, d, r);
                 } else {
                     header(ui, d);
-                    grid(app, ui, d, FOOTER_H + 8.0);
+                    // (a phone's columns fill the width already: the photos get the slider's room)
+                    if !crate::widgets::finger_ui(ui) {
+                        thumb_size_slider(app, ui);
+                    }
+                    grid(app, ui, d, footer_h(ui) + 8.0);
                 }
                 pressed = footer(ui, d);
             });
@@ -117,7 +169,7 @@ fn header(ui: &mut egui::Ui, d: &mut ImportDialog) {
     let n = d.candidates.len();
     let (dups, in_source, trashed) = dup_counts(d);
     let sel = d.selected_paths().len();
-    ui.horizontal(|ui| {
+    let counts = |ui: &mut egui::Ui| {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} found · {sel} selected", n = n, sel = sel)).color(t.text));
         if dups > 0 {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {dups} already in the library", dups = dups)).color(t.text_dim));
@@ -129,17 +181,27 @@ fn header(ui: &mut egui::Ui, d: &mut ImportDialog) {
         if trashed > 0 {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {trashed} in Recently Deleted", trashed = trashed)).color(t.text_dim));
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::text_button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
-                d.checked.iter_mut().for_each(|c| *c = false);
+    };
+    let buttons = |ui: &mut egui::Ui, d: &mut ImportDialog| {
+        if crate::widgets::text_button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
+            d.checked.iter_mut().for_each(|c| *c = false);
+        }
+        if crate::widgets::text_button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
+            for i in 0..n {
+                d.checked[i] = d.checked_by_default(i);
             }
-            if crate::widgets::text_button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
-                for i in 0..n {
-                    d.checked[i] = d.checked_by_default(i);
-                }
-            }
+        }
+    };
+    if crate::widgets::finger_ui(ui) {
+        // a phone: the counts on a line of their own, the finger-sized buttons under them
+        ui.horizontal_wrapped(counts);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| buttons(ui, d));
+    } else {
+        ui.horizontal(|ui| {
+            counts(ui);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| buttons(ui, d));
         });
-    });
+    }
     // with more than one file type: a toggle per type checks or unchecks all of its files
     let types = d.file_types();
     if types.len() > 1 {
@@ -161,11 +223,14 @@ fn header(ui: &mut egui::Ui, d: &mut ImportDialog) {
 fn grid(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, below: f32) {
     let n = d.candidates.len();
     let avail = ui.available_width();
-    // as many columns as fit at the smallest size, each widened to share the row's width
-    let cols = ((avail + CELL_GAP) / (CELL + CELL_GAP)).floor().max(1.0) as usize;
-    let cell = ((avail + CELL_GAP) / cols as f32 - CELL_GAP).clamp(CELL.min(avail), 1.6 * CELL).floor();
+    // the size picked with the slider, as many columns as fit
+    let cell = thumb_size(app.ui.import_thumb_size).min(avail.max(1.0));
+    let cols = ((avail + CELL_GAP) / (cell + CELL_GAP)).floor().max(1.0) as usize;
+    // a phone's columns share the whole width (no empty strip at the right of the grid)
+    let cell = if crate::widgets::finger_ui(ui) { ((avail - CELL_GAP * (cols as f32 - 1.0)) / cols as f32).floor().max(cell) } else { cell };
     let rows = n.div_ceil(cols);
     let h = (ui.available_height() - below).floor().max(CELL + NAME_H);
+    let mut visible = std::collections::HashSet::new();
     let r = egui::ScrollArea::vertical().id_salt("import-grid").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show_viewport(
         ui,
         |ui, viewport| {
@@ -176,17 +241,22 @@ fn grid(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, below:
                 if !local.intersects(viewport.expand(cell)) {
                     continue;
                 }
+                let Ok(slot) = u32::try_from(i) else { continue };
+                visible.insert(slot);
                 let rect = local.translate(area.min.to_vec2());
                 candidate_cell(app, ui, d, i, rect);
             }
         },
     );
+    if !ui.is_sizing_pass() {
+        app.renderer.retain_imports(&visible);
+    }
     register(ui, "grid:importPhotos", r.inner_rect);
 }
 
 /// The options, scrolling within `column` above the buttons.
 fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, column: Rect) {
-    let h = (column.bottom() - ui.cursor().top() - FOOTER_H - 8.0).floor().max(40.0);
+    let h = (column.bottom() - ui.cursor().top() - footer_h(ui) - 8.0).floor().max(40.0);
     let r = egui::ScrollArea::vertical().id_salt("import-options").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 8.0;
         options(app, ui, d);
@@ -197,21 +267,15 @@ fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
 /// Cancel and Import (or Move) at the bottom right.
 fn footer(ui: &mut egui::Ui, d: &ImportDialog) -> Option<Footer> {
     let mut pressed = None;
-    let top = (ui.max_rect().bottom() - FOOTER_H).max(ui.cursor().top());
+    let top = (ui.max_rect().bottom() - footer_h(ui)).max(ui.cursor().top());
     let r = Rect::from_min_max(pos2(ui.max_rect().left(), top), ui.max_rect().max);
     ui.scope_builder(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
-        let n = d.selected_paths().len();
-        let verb = if d.copy && d.move_files { "Move" } else { "Import" };
-        let label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
-        let t = Tokens::get(ui.ctx());
-        let ok = ui.add(egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(t.accent).min_size(vec2(0.0, 28.0)));
-        register(ui, "button:dialogOk", ok.rect);
-        if ok.clicked() {
+        use crate::button::{Button, Kind};
+        let label = crate::dialogs::import_ok_label(d);
+        if Button::new(&label).kind(Kind::Primary).widget("button:dialogOk").id_salt("import").min_width(72.0).show(ui).clicked() {
             pressed = Some(Footer::Import);
         }
-        let cancel = ui.add(egui::Button::new(crate::i18n::tr("Cancel")).min_size(vec2(0.0, 28.0)));
-        register(ui, "button:dialogCancel", cancel.rect);
-        if cancel.clicked() {
+        if Button::new("Cancel").widget("button:dialogCancel").id_salt("import").min_width(72.0).show(ui).clicked() {
             pressed = Some(Footer::Cancel);
         }
     });
@@ -496,7 +560,8 @@ fn options(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
 /// uses its width as height.
 fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, i: usize, rect: Rect) {
     let t = Tokens::get(ui.ctx());
-    let c = d.candidates[i].clone();
+    let Some(c) = d.candidates.get(i).cloned() else { return };
+    let Ok(slot_index) = u32::try_from(i) else { return };
     let ok = d.importable(i);
     let img = Rect::from_min_size(rect.min, vec2(rect.width(), rect.width()));
     let resp = ui.interact(img, egui::Id::unique(("import-cell", i)), Sense::click());
@@ -505,12 +570,9 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     let p = ui.painter();
     p.rect_filled(img, 3.0, t.skeleton);
     // thumbnail (background job; the grid only asks for the cells in view)
-    let slot = Slot::Import(i as u32);
-    if !app.renderer.textures.contains_key(&slot)
-        && let Some(job) = app.session.candidate_thumb_job(&c, 192, i as u64)
-    {
-        app.renderer.request_quick(slot, job, 4);
-    }
+    let slot = Slot::Import(slot_index);
+    let edge = thumb_edge(img.width(), ui.ctx().pixels_per_point());
+    app.renderer.import_preview(&mut app.session, &c, slot_index, edge);
     if let Some(tex) = app.renderer.textures.get(&slot) {
         let [tw, th] = tex.size;
         let s = ((img.width() - 8.0) / tw as f32).min((img.height() - 8.0) / th as f32);
@@ -518,7 +580,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         let tint = if ok { Color32::WHITE } else { Color32::from_gray(110) };
         p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     }
-    let on = d.checked[i] && ok;
+    let on = d.checked.get(i).copied().unwrap_or(false) && ok;
     if on {
         p.rect_stroke(img, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
@@ -540,13 +602,20 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         _ => None,
     };
     if let Some(b) = badge {
-        let g = p.layout_no_wrap(crate::i18n::tr(b).to_string(), t.semibold(10.0), Color32::WHITE);
+        let mut label = egui::text::LayoutJob::simple_singleline(crate::i18n::tr(b).to_string(), t.semibold(10.0), Color32::WHITE);
+        label.wrap.max_width = (img.width() - 16.0).max(1.0);
+        label.wrap.max_rows = 1;
+        let g = p.layout_job(label);
         let br = badge_rect(img, cb, g.size());
         p.rect_filled(br, 3.0, Color32::from_rgba_unmultiplied(170, 60, 50, 220));
         p.galley(br.min + vec2(4.0, 2.0), g, Color32::WHITE);
     }
-    let name = if c.name.chars().count() > 18 { format!("{}…", c.name.chars().take(17).collect::<String>()) } else { c.name.clone() };
-    p.text(pos2(rect.left() + 2.0, img.bottom() + 9.0), Align2::LEFT_CENTER, name, t.font(10.5), if ok { t.text_label } else { t.text_dim });
+    let color = if ok { t.text_label } else { t.text_dim };
+    let mut name = egui::text::LayoutJob::simple_singleline(c.name.clone(), t.font(10.5), color);
+    name.wrap.max_width = (rect.width() - 4.0).max(1.0);
+    name.wrap.max_rows = 1;
+    let name = p.layout_job(name);
+    p.galley(pos2(rect.left() + 2.0, img.bottom() + 2.0), name, color);
     let tip = format!(
         "{}\n{} × {} · {} · {:.1} MB{}",
         c.path,

@@ -1,6 +1,6 @@
 //! The About window's credits: every contributor (GitHub login always; display and real names only
 //! with recorded consent) and the AI models that helped. The tables are baked into the binary by
-//! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
+//! build.rs from contributors/contributors.json; nothing is
 //! read at run time.
 
 use std::cmp::Ordering;
@@ -355,6 +355,66 @@ pub fn models_ui(ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// "1 commit", "12 commits".
+fn commits(n: u64) -> String {
+    if n == 1 { crate::i18n::tr("1 commit").to_string() } else { crate::i18n::tr_format!("{} commits", group(n)) }
+}
+
+/// About ▸ Contributors on a phone: who, in an order picked with a segmented control, as rows
+/// (the name, then their commits and first day); a row opens their GitHub profile.
+pub fn phone_contributors(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let id = egui::Id::unique("credits_phone_sort");
+    let mut sort = ui.data(|d| d.get_temp::<usize>(id)).unwrap_or(0);
+    ui.add_space(8.0);
+    if super::about_phone::segmented(ui, "button:creditsSort", &["First commit", "Commits", "Name"], &mut sort) {
+        ui.data_mut(|d| d.insert_temp(id, sort));
+    }
+    let (key, ascending) = match sort {
+        1 => (SortKey::Commits, false),
+        2 => (SortKey::Name, true),
+        _ => (SortKey::FirstCommit, true),
+    };
+    let list = sorted(CONTRIBUTORS, NameMode::DisplayName, key, ascending);
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(crate::i18n::tr_format!("{} contributors · {} commits", list.len(), group(TOTAL_COMMITS))).font(t.font(13.0)).color(t.text_dim),
+    );
+    if list.is_empty() {
+        ui.label(crate::i18n::tr("No contributor data was built into this copy."));
+        return;
+    }
+    for c in list {
+        let name = c.name(NameMode::DisplayName);
+        let mut detail = commits(c.commits);
+        if c.display_name.is_some() {
+            detail = format!("@{} · {detail}", c.login);
+        }
+        if !c.first_commit.is_empty() {
+            detail = format!("{detail} · {}", crate::i18n::tr_format!("since {}", day(c.first_commit)));
+        }
+        if super::about_phone::two_line_row(ui, &format!("credit:{}", c.login), &name, &detail, false) {
+            let _ = crate::links::open(app, &profile_url(c));
+        }
+    }
+}
+
+/// About ▸ Models on a phone: a row for each model, its share of the commits under its name.
+pub fn phone_models(ui: &mut egui::Ui) {
+    if MODELS.is_empty() {
+        ui.label(crate::i18n::tr("No model credits were built into this copy."));
+        return;
+    }
+    let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
+    for m in MODELS {
+        let title = [m.company, m.model, m.version].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
+        let share = 100.0 * m.commits as f64 / TOTAL_COMMITS.max(assisted) as f64;
+        let detail =
+            crate::i18n::tr_format!("{} commits ({:.0}%) · +{} / −{} lines", group(m.commits), share, group(m.lines_added), group(m.lines_deleted));
+        super::about_phone::two_line_row(ui, &format!("model:{title}"), &title, &detail, false);
+    }
 }
 
 #[cfg(test)]

@@ -115,3 +115,21 @@ fn screenshots_when_asked() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// On a phone held upright the review's controls are a finger's size and its photos share the
+/// width (no empty strip at the right of the grid).
+#[test]
+fn an_upright_phone_gets_finger_sized_controls_and_a_full_width_grid() {
+    let (mut h, dir) = review([393.0, 852.0], "iphone-portrait-fingers");
+    for id in ["button:dialogOk", "button:dialogCancel", "button:importAll", "button:importNone"] {
+        let r = rect(&mut h, id).unwrap_or_else(|| panic!("no {id}"));
+        assert!(r.height() >= 44.0, "{id} is a finger's height: {r:?}");
+    }
+    let grid = rect(&mut h, "grid:importPhotos").expect("the photos");
+    let cells: Vec<egui::Rect> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("import:")).map(|(_, r)| *r).collect();
+    assert!(!cells.is_empty(), "the photos' cells");
+    let right = cells.iter().map(|r| r.right()).fold(f32::MIN, f32::max);
+    assert!(grid.right() - right < 24.0, "the columns reach the grid's right edge: {right} in {grid:?}");
+    assert!(rect(&mut h, "slider:importThumbSize").is_none(), "no thumbnail size slider: the columns fill the width");
+    let _ = std::fs::remove_dir_all(dir);
+}

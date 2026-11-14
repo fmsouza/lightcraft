@@ -12,7 +12,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::panels::settings::{check, heading, hint};
+use crate::panels::settings::{PhoneButton, check, heading, hint, phone_button, tick_box};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -76,6 +76,15 @@ fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
     v
 }
 
+/// Tests: answer the model list as a library where recognition can run but has no model yet (the
+/// headless app has no model folder, so it would say recognition is unavailable).
+#[cfg(test)]
+pub(crate) fn pretend_no_model_yet(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let v = json!({"dir": "/models", "runtime": true, "models": [], "embedder": null, "enabled": false});
+    let (epoch, now) = (app.caches.faces_epoch, app.tick_now());
+    ctx.data_mut(|d| d.insert_temp(list_id(), (epoch, now, v)));
+}
+
 /// What stands between the user and name suggestions, for the prompts where faces are shown or named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Setup {
@@ -137,7 +146,7 @@ pub fn take_step(app: &mut LightcraftApp, ctx: &egui::Context, step: Setup) {
             if app.run("faces.enable", json!({"enabled": true})).is_ok() {
                 app.caches.faces_epoch += 1;
                 app.ui.status = "Face recognition is on".into();
-                app.toast(ctx, "Face recognition is on");
+                app.toast(ctx, crate::i18n::tr("Face recognition is on"));
             }
         }
         Setup::GetModel => {
@@ -152,15 +161,28 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let step = setup(app, ui.ctx());
     let Some((message, button)) = step.prompt() else { return };
     let t = Tokens::get(ui.ctx());
-    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(message).font(t.font(12.5)).color(t.text_dim));
-            let r = ui.button(button);
+    // a phone: the message on its own lines, then a full-width button a finger can take
+    let phone = crate::panels::compact::is_compact(ui.ctx());
+    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, if phone { 10 } else { 6 })).show(ui, |ui| {
+        let clicked = if phone {
+            ui.add(egui::Label::new(RichText::new(crate::i18n::tr(message)).font(t.font(15.0)).color(t.text_dim)).wrap());
+            ui.add_space(8.0);
+            let r =
+                ui.add_sized(egui::vec2(ui.available_width(), 44.0), egui::Button::new(RichText::new(crate::i18n::tr(button)).font(t.font(16.0))));
             register(ui, "faces:setup", r.rect);
-            if r.clicked() {
-                take_step(app, ui.ctx(), step);
-            }
-        });
+            r.clicked()
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(crate::i18n::tr(message)).font(t.font(12.5)).color(t.text_dim));
+                let r = ui.button(crate::i18n::tr(button));
+                register(ui, "faces:setup", r.rect);
+                r.clicked()
+            })
+            .inner
+        };
+        if clicked {
+            take_step(app, ui.ctx(), step);
+        }
     });
 }
 
@@ -254,38 +276,70 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // (issue #678), so it can only be switched off, with the hint below saying what to do first
     let usable =
         list["embedder"].as_str().is_some_and(|id| list["models"].as_array().into_iter().flatten().any(|m| m["id"] == id && m["installed"] == true));
-    let r = ui
-        .add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
-        .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."));
-    register(ui, "check:settings.facesEnabled", r.rect);
-    if r.changed() {
+    let mobile = app.services.mobile;
+    let changed = if mobile {
+        // a phone's switch row (`settings::widgets::check`), off while there is nothing to run
+        ui.add_enabled_ui(on || (runtime && usable), |ui| check(ui, "settings.facesEnabled", &mut on, "Recognise faces")).inner
+    } else {
+        let r = ui
+            .add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
+            .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."));
+        register(ui, "check:settings.facesEnabled", r.rect);
+        r.changed()
+    };
+    if changed {
         match app.run("faces.enable", json!({"enabled": on})) {
             Ok(_) => app.caches.faces_epoch += 1,
             Err(e) => app.toast(ui.ctx(), e),
         }
     }
-    hint(ui, t, "Suggests who is in a photo from the faces you have named. Everything stays on your computer.");
+    hint(
+        ui,
+        t,
+        if mobile {
+            "Suggests who is in a photo from the faces you have named. Everything stays on this device."
+        } else {
+            "Suggests who is in a photo from the faces you have named. Everything stays on your computer."
+        },
+    );
     if !runtime {
         hint(ui, t, "This build cannot run recognition models: they can be added and chosen, not used.");
     } else if !usable {
-        hint(ui, t, "Choose a model below (Use) to start.");
+        hint(ui, t, if mobile { "Download a recognition model below to start." } else { "Choose a model below (Use) to start." });
     } else if on && app.caches.faces_active {
         scan_progress(app, ui, t);
     }
     let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
     let downloads =
         app.session.execute("faces.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
-    gpu_section(app, ui, t, &list["gpu"]);
+    // (a phone picks its own processor for them)
+    if !mobile {
+        gpu_section(app, ui, t, &list["gpu"]);
+    }
     heading(ui, t, "Face detector");
     for m in all.iter().filter(|m| m["role"] == "detector") {
-        model_row(app, ui, t, m, downloads.iter().find(|d| d["id"] == m["id"]), runtime);
+        let dl = downloads.iter().find(|d| d["id"] == m["id"]);
+        if mobile { phone_model_row(ui, m, dl) } else { model_row(app, ui, t, m, dl, runtime) }
     }
     if !all.iter().any(|m| m["role"] == "detector" && m["installed"] == true) {
-        hint(ui, t, "Detect Faces (Photo menu) needs it: a small one-time download.");
+        hint(
+            ui,
+            t,
+            if mobile {
+                "Finding faces needs it: a small one-time download."
+            } else {
+                "Detect Faces (Photo menu) needs it: a small one-time download."
+            },
+        );
     }
     heading(ui, t, "Recognition models");
-    for m in all.iter().filter(|m| m["role"] == "embedder") {
-        model_row(app, ui, t, m, downloads.iter().find(|d| d["id"] == m["id"]), runtime);
+    for m in all.iter().filter(|m| m["role"] == "embedder" && (!mobile || fits_a_phone(m))) {
+        let dl = downloads.iter().find(|d| d["id"] == m["id"]);
+        if mobile { phone_model_row(ui, m, dl) } else { model_row(app, ui, t, m, dl, runtime) }
+    }
+    if mobile {
+        hint(ui, t, "Larger models, such as AuraFace, are for computers: on a phone they would take seconds a face and most of the app's memory.");
+        return;
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -301,10 +355,24 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     for e in list["catalog"]["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).take(3) {
         ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.caution)).wrap());
     }
+    footer(ui, t, &all);
+}
+
+/// Which detector finds the faces.
+fn footer(ui: &mut egui::Ui, t: &Tokens, all: &[Value]) {
     if let Some(d) = all.iter().find(|m| m["role"] == "detector") {
         ui.add_space(4.0);
         hint(ui, t, &format!("Faces are found by {} ({}, included).", d["name"].as_str().unwrap_or("the detector"), mb(d["sizeBytes"].as_u64())));
     }
+}
+
+/// Largest recognition model a phone or tablet is offered (bytes): SFace (39 MB) fits, AuraFace
+/// (261 MB, about 24 GFLOPs a face) would take seconds a face and most of the app's memory.
+const PHONE_MODEL_MAX: u64 = 100 * 1024 * 1024;
+
+/// Whether a recognition model is one for a phone: not AuraFace, nor anything as large.
+fn fits_a_phone(m: &Value) -> bool {
+    m["id"] != "auraface-v1" && m["sizeBytes"].as_u64().is_none_or(|b| b <= PHONE_MODEL_MAX)
 }
 
 /// How the scan is going: a bar while photos are left, then how many faces it learned.
@@ -316,6 +384,164 @@ fn scan_progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     let text = format!("Scanning photos for faces: {left} left · {faces} faces so far");
     crate::progress::Progress::new(Some(1.0 - left as f32 / peak as f32)).label(text).widget("faces:scanProgress").show(ui);
+}
+
+/// Where a model's download is, for a phone's row: "12.0 of 38.7 MB", "Installing…", why it failed.
+fn download_line(m: &Value, dl: Option<&Value>) -> Option<(String, bool)> {
+    if m["installed"] == true {
+        return None;
+    }
+    let d = dl?;
+    match d["state"].as_str() {
+        Some("running") => {
+            let (got, total) = (d["bytes"].as_u64().unwrap_or(0), d["total"].as_u64().unwrap_or(0));
+            Some((if total > 0 && got >= total { "Checking…".into() } else { format!("{} of {}", mb(Some(got)), mb(Some(total))) }, true))
+        }
+        Some("done") => Some((crate::i18n::tr("Installing…").to_string(), true)),
+        Some("failed") => Some((crate::panels::denoise::download_failure(d), false)),
+        _ => None,
+    }
+}
+
+/// A model in a phone's Faces settings: its name over its size and licence (or its download), its
+/// state at the right (In Use, Installed), and a › to its page.
+fn phone_model_row(ui: &mut egui::Ui, m: &Value, dl: Option<&Value>) {
+    let t = Tokens::get(ui.ctx());
+    let id = m["id"].as_str().unwrap_or("");
+    let name = m["name"].as_str().unwrap_or(id);
+    let state = if m["selected"] == true {
+        crate::i18n::tr("In Use")
+    } else if m["installed"] == true {
+        crate::i18n::tr("Installed")
+    } else {
+        ""
+    };
+    let (detail, ok) = download_line(m, dl).unwrap_or_else(|| {
+        let licence = m["licence"]["name"].as_str().unwrap_or("");
+        (format!("{} · {licence}", mb(m["sizeBytes"].as_u64())), true)
+    });
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 60.0), egui::Sense::click());
+    register(ui, format!("faces:model:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let p = ui.painter();
+    if resp.is_pointer_button_down_on() {
+        p.rect_filled(r, 8.0, t.hover);
+    }
+    let chevron = egui::Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
+    crate::icons::paint(p, chevron, crate::icons::Icon::ChevronRight, t.text_dim);
+    let state_w = if state.is_empty() {
+        0.0
+    } else {
+        let g = p.layout_no_wrap(state.to_string(), t.font(15.0), if m["selected"] == true { t.accent } else { t.text_dim });
+        let gw = g.size().x;
+        p.galley(egui::pos2(r.right() - 30.0 - gw, r.center().y - g.size().y / 2.0), g, t.text);
+        gw + 12.0
+    };
+    let room = w - 46.0 - state_w;
+    let fit = |s: &str, font: egui::FontId| {
+        crate::widgets::elide_head(s, room, |x| ui.painter().layout_no_wrap(x.to_string(), font.clone(), t.text).size().x)
+    };
+    let p = ui.painter();
+    p.text(egui::pos2(r.left() + 8.0, r.center().y - 10.0), egui::Align2::LEFT_CENTER, fit(name, t.font(16.0)), t.font(16.0), t.text);
+    p.text(
+        egui::pos2(r.left() + 8.0, r.center().y + 11.0),
+        egui::Align2::LEFT_CENTER,
+        fit(&detail, t.font(13.0)),
+        t.font(13.0),
+        if ok { t.text_dim } else { t.caution },
+    );
+    if resp.clicked() {
+        crate::panels::settings::open_subpage(ui.ctx(), &format!("faceModel:{id}"), name);
+    }
+}
+
+/// A model's page on a phone (from its row in Faces): what it is, where its download is, its
+/// licence, then its actions as the system's buttons: Download, Use, Remove, its page.
+pub(crate) fn phone_model_page(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str) {
+    let t = Tokens::get(ui.ctx());
+    let list = models(app, ui.ctx());
+    let Some(m) = list["models"].as_array().and_then(|a| a.iter().find(|m| m["id"] == id)).cloned() else {
+        hint(ui, &t, "This model is no longer listed.");
+        return;
+    };
+    let downloads =
+        app.session.execute("faces.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    let dl = downloads.iter().find(|d| d["id"] == id);
+    let detector = m["role"] == "detector";
+    let (installed, selected) = (m["installed"] == true, m["selected"] == true);
+    let running = !installed && dl.is_some_and(|d| d["state"] == "running");
+    let text = |ui: &mut egui::Ui, s: &str, size: f32, color: egui::Color32| {
+        ui.add(egui::Label::new(RichText::new(s).font(t.font(size)).color(color)).wrap());
+    };
+    ui.add_space(8.0);
+    ui.label(RichText::new(m["name"].as_str().unwrap_or(id)).font(t.semibold(20.0)).color(t.text));
+    let state = if selected {
+        crate::i18n::tr("In use")
+    } else if installed {
+        crate::i18n::tr("Installed")
+    } else {
+        crate::i18n::tr("Not downloaded")
+    };
+    text(ui, &format!("{} · {state}", mb(m["sizeBytes"].as_u64())), 15.0, t.text_dim);
+    if let Some((line, ok)) = download_line(&m, dl) {
+        if running && let Some(d) = dl {
+            let (got, total) = (d["bytes"].as_u64().unwrap_or(0), d["total"].as_u64().unwrap_or(0));
+            crate::progress::Progress::new(crate::progress::fraction_of(got, total)).label(line).widget(format!("faces:progress:{id}")).show(ui);
+        } else {
+            text(ui, &line, 15.0, if ok { t.text_dim } else { t.caution });
+        }
+    }
+    let speed = m["speedText"].as_str().filter(|s| !s.is_empty());
+    match m["accepted"]["selfTest"].as_object() {
+        Some(test) if test.get("ok").and_then(Value::as_bool) == Some(true) => {
+            text(ui, &speed.map_or("Works".to_string(), |s| format!("Works · {s}")), 15.0, t.text_dim)
+        }
+        Some(_) => text(ui, crate::i18n::tr("Failed its last test"), 15.0, t.caution),
+        None => {
+            if let Some(s) = speed {
+                text(ui, s, 15.0, t.text_dim);
+            }
+        }
+    }
+    heading(ui, &t, "Licence");
+    ui.label(RichText::new(licence_line(&m)).font(t.semibold(15.0)).color(if m["licence"]["commercial"] == "yes" { t.text } else { t.caution }));
+    let notice = m["licence"]["notice"].as_str().unwrap_or("");
+    if !notice.is_empty() {
+        text(ui, notice, 15.0, t.text_label);
+    }
+    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
+        ui.add_space(4.0);
+        if super::about_phone::row(ui, "faceModel:page", crate::i18n::tr("Open the model's page"), None, true) {
+            open_page(app, url);
+        }
+    }
+    ui.add_space(16.0);
+    let can_run = list["runtime"].as_bool() == Some(true);
+    if installed {
+        if !selected && !detector && phone_button(ui, &format!("faces:use:{id}"), crate::i18n::tr("Use This Model"), PhoneButton::Filled, true) {
+            let _ = app.run("faces.models.select", json!({"id": id}));
+            app.caches.faces_epoch += 1;
+        }
+        ui.add_space(8.0);
+        if phone_button(ui, &format!("faces:remove:{id}"), crate::i18n::tr("Remove"), PhoneButton::Destructive, true) {
+            let _ = app.run("faces.models.remove", json!({"id": id}));
+            app.caches.faces_epoch += 1;
+        }
+    } else if running {
+        if phone_button(ui, &format!("faces:cancelDownload:{id}"), crate::i18n::tr("Cancel Download"), PhoneButton::Tinted, true) {
+            let _ = app.run("faces.models.downloadCancel", json!({"id": id}));
+            app.caches.faces_dl_watch.retain(|w| w != id);
+        }
+    } else if can_run && m["downloadHost"].as_str().is_some_and(|h| !h.is_empty()) {
+        let failed = dl.is_some_and(|d| d["state"] == "failed");
+        let label = crate::i18n::tr_format!("{} ({})", crate::i18n::tr(if failed { "Try Again" } else { "Download" }), mb(m["sizeBytes"].as_u64()));
+        if phone_button(ui, &format!("faces:download:{id}"), &label, PhoneButton::Filled, true) {
+            open_download_dialog(app, &m);
+        }
+        ui.add_space(6.0);
+        hint(ui, &t, "Its terms come first. Nothing is fetched until you accept them.");
+    }
 }
 
 fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
@@ -379,7 +605,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         });
                     }
                     (Some("failed"), Some(d)) => {
-                        let why = sentence(d["error"].as_str().unwrap_or("The download failed"));
+                        let why = crate::panels::denoise::download_failure(d);
                         ui.add(egui::Label::new(RichText::new(why).font(t.font(11.5)).color(t.caution)).wrap());
                     }
                     _ => {}
@@ -447,6 +673,10 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
 /// The body of the "Add Face Model" dialog: what the file is, its terms, and the accept box.
 /// `info` is the engine's `faces.models.inspect` answer.
 pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info: &Value, accepted: &mut bool) {
+    if crate::panels::settings::portrait_phone(ui.ctx()) {
+        phone_model_dialog(app, ui, t, info, accepted);
+        return;
+    }
     let kind = info["kind"].as_str().unwrap_or("unsupported");
     let file = info["fileName"].as_str().unwrap_or("");
     if kind == "unsupported" {
@@ -518,6 +748,76 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         "The model is kept on this computer only. LightCraft never uploads or shares it."
     };
     ui.label(RichText::new(closing).font(t.font(11.5)).color(t.text_dim));
+}
+
+/// A model's terms on a phone: its name and size, what happens, the licence under its heading,
+/// the model's page as a row, then the switch that accepts them (the sheet's foot downloads).
+fn phone_model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info: &Value, accepted: &mut bool) {
+    let kind = info["kind"].as_str().unwrap_or("unsupported");
+    let file = info["fileName"].as_str().unwrap_or("");
+    let text = |ui: &mut egui::Ui, s: &str, size: f32, color: egui::Color32| {
+        ui.add(egui::Label::new(RichText::new(s).font(t.font(size)).color(color)).wrap());
+    };
+    let m = &info["model"];
+    ui.add_space(4.0);
+    ui.label(RichText::new(m["name"].as_str().unwrap_or(file)).font(t.semibold(20.0)).color(t.text));
+    text(ui, &mb(info["sizeBytes"].as_u64()), 15.0, t.text_dim);
+    if kind == "unsupported" {
+        ui.add_space(6.0);
+        ui.label(RichText::new(crate::i18n::tr("This file cannot be used yet")).font(t.semibold(16.0)).color(t.caution));
+        text(ui, &sentence(info["reason"].as_str().unwrap_or("It is not a face recognition model LightCraft understands")), 15.0, t.text_label);
+        return;
+    }
+    if info["alreadyInstalled"] == true {
+        text(ui, crate::i18n::tr("Already installed. Installing again is harmless."), 15.0, t.text_dim);
+    }
+    let download = info["download"].is_string();
+    if download {
+        let host = info["host"].as_str().unwrap_or("its own repository");
+        let then = if m["role"] == "detector" { "" } else { ", starts using it and turns face recognition on" };
+        ui.add_space(6.0);
+        text(ui, &format!("Downloads from {host}. Once it has arrived and checked out, LightCraft installs it{then}."), 15.0, t.text_label);
+    }
+    heading(ui, t, "Licence");
+    let commercial = m["licence"]["commercial"].as_str().unwrap_or("unknown");
+    ui.label(RichText::new(licence_line(m)).font(t.semibold(15.0)).color(if commercial == "yes" { t.text } else { t.caution }));
+    let notice = m["licence"]["notice"].as_str().unwrap_or("");
+    if !notice.is_empty() {
+        text(ui, notice, 15.0, t.text_label);
+    }
+    let provenance = m["provenance"].as_str().unwrap_or("");
+    if !provenance.is_empty() {
+        // (a provenance that says what it was trained on already isn't prefixed again)
+        let line = if provenance.starts_with("Trained on") {
+            provenance.to_string()
+        } else {
+            crate::i18n::tr_format!("Trained on: {provenance}", provenance = provenance)
+        };
+        text(ui, &line, 14.0, t.text_dim);
+    }
+    if kind == "draft" {
+        text(ui, crate::i18n::tr("LightCraft does not know this model, so it assumed:"), 15.0, t.text_label);
+        for a in info["assumptions"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            text(ui, &format!("•  {a}"), 14.0, t.text_dim);
+        }
+    }
+    if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
+        ui.add_space(4.0);
+        if super::about_phone::row(ui, "faceModel:page", crate::i18n::tr("Open the model's page"), None, true) {
+            open_page(app, url);
+        }
+    }
+    heading(ui, t, "Your consent");
+    tick_box(ui, "faceModel.accept", accepted, crate::i18n::tr("I accept these terms for my own use"));
+    hint(
+        ui,
+        t,
+        if download {
+            "Nothing is fetched until you accept. The model stays on this device; LightCraft never uploads or shares it."
+        } else {
+            "The model stays on this device. LightCraft never uploads or shares it."
+        },
+    );
 }
 
 /// Pressing Download: the model's terms first, in the same dialog as a model file. Accepting them starts the download;
@@ -683,7 +983,7 @@ pub fn name_editor(
                 }
             }
             if let Some(label) = setup.short() {
-                let b = ui.add(egui::Button::new(RichText::new(label).font(t.font(12.0)).color(t.accent)).frame(false));
+                let b = ui.add(egui::Button::new(RichText::new(crate::i18n::tr(label)).font(t.font(12.0)).color(t.accent)).frame(false));
                 register(ui, "faces:setup", b.rect);
                 if b.clicked() {
                     outcome = Editor::Setup;
@@ -809,8 +1109,13 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
             .ok()
             .is_some_and(|l| l["models"].as_array().is_some_and(|a| a.iter().any(|m| m["id"] == id.as_str() && m["role"] == "detector")));
         let text = if detector { format!("{name} is installed") } else { format!("{name} is installed and in use: face recognition is on") };
-        app.ui.status = text.clone();
-        app.toast(ctx, text);
+        let toast = if detector {
+            crate::i18n::tr_format!("{name} is installed", name = name)
+        } else {
+            crate::i18n::tr_format!("{name} is installed and in use: face recognition is on", name = name)
+        };
+        app.ui.status = text;
+        app.toast(ctx, toast);
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(120));
 }
@@ -846,5 +1151,19 @@ mod tests {
         // running and just-arrived ones are watched; failed, cancelled and vanished ones are dropped
         assert_eq!(keep, ["a", "b"]);
         assert_eq!(due(&[], vec!["x".into()]), (vec![], vec![]));
+    }
+}
+
+#[cfg(test)]
+mod phone_tests {
+    use super::fits_a_phone;
+    use serde_json::json;
+
+    #[test]
+    fn a_phone_is_offered_sface_not_auraface_or_anything_as_large() {
+        assert!(fits_a_phone(&json!({"id": "sface-2021dec", "sizeBytes": 38_700_000})));
+        assert!(!fits_a_phone(&json!({"id": "auraface-v1", "sizeBytes": 261_000_000})));
+        assert!(!fits_a_phone(&json!({"id": "someone-elses", "sizeBytes": 200_000_000})), "as large as AuraFace");
+        assert!(fits_a_phone(&json!({"id": "small-unknown-size"})), "a size not known yet");
     }
 }

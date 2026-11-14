@@ -6,7 +6,7 @@ cd "$(dirname "$0")/../../.."
 CARGO=${CARGO:-cargo}
 TARGET=aarch64-apple-ios-sim
 PROFILE=${PROFILE:-debug}
-[ "$PROFILE" = release ] && FLAG=--release || FLAG=
+[ "$PROFILE" = debug ] && FLAG= || FLAG="--profile $PROFILE"
 $CARGO build $FLAG -p lightcraft-mobile --bin lightcraft-ios --target $TARGET
 OUT=${CARGO_TARGET_DIR:-target}/$TARGET/$PROFILE
 APP=$OUT/LightCraft.app

@@ -1,12 +1,17 @@
 use super::albums::top_level_drop_target;
-use super::rows::{ROW_HEIGHT, note_width};
-use super::*;
+use super::rows::{note_width, row_height};
+use super::{Align2, Icon, LightcraftApp, Rect, Sense, SidebarSection, Tokens, icon_button, json, paint, pos2, register, vec2};
 
 /// Space above a section's header.
 pub(super) const SECTION_GAP: f32 = 10.0;
 
 /// Height of a section's header.
 const SECTION_HEADER: f32 = 34.0;
+
+/// A section header's height on this screen: a finger's 44 pt in the phone layout's drawer.
+fn header_height(ctx: &egui::Context) -> f32 {
+    if crate::panels::compact::is_compact(ctx) { 44.0 } else { SECTION_HEADER }
+}
 
 /// One sidebar section: the gap above it, its header, and (while it is open) the rows `body`
 /// draws. Every section goes through here, so they all fold, space and announce themselves alike.
@@ -19,7 +24,7 @@ pub(super) fn section(
     body: impl FnOnce(&mut LightcraftApp, &mut egui::Ui),
 ) -> PlacedSection {
     ui.add_space(SECTION_GAP);
-    let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), SECTION_HEADER), Sense::hover());
+    let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), header_height(ui.ctx())), Sense::hover());
     // a hairline in the gap above tells the sections apart
     let t = Tokens::get(ui.ctx());
     let edge = visible_right(ui).min(header.right());
@@ -51,7 +56,7 @@ pub(super) fn section(
 
 /// Where what the panel shows of the sidebar's content ends (screen x): the content is wider
 /// than the panel while the sidebar scrolls sideways.
-fn visible_right(ui: &egui::Ui) -> f32 {
+pub(super) fn visible_right(ui: &egui::Ui) -> f32 {
     ui.data(|d| d.get_temp(egui::Id::unique("left-visible-right"))).unwrap_or(f32::MAX)
 }
 
@@ -62,8 +67,9 @@ fn visible_right(ui: &egui::Ui) -> f32 {
 pub(super) fn pinned_header(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSection], view_top: f32) {
     let pinned = placed.iter().find(|p| p.open && p.top < view_top && p.bottom > view_top);
     let rect = pinned.map(|p| {
-        let top = view_top.min(p.bottom - SECTION_HEADER);
-        Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + SECTION_HEADER)
+        let h = header_height(ui.ctx());
+        let top = view_top.min(p.bottom - h);
+        Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + h)
     });
     // rows ask where it is (next frame: they are laid out before it)
     ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-pinned-rect"), rect));
@@ -86,7 +92,7 @@ pub(super) fn pinned_header(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: 
 /// `sidebarEmpty:<id>`), so the section stays where it is instead of disappearing.
 fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_height(ui.ctx())), Sense::hover());
     register(ui, format!("sidebarEmpty:{}", section.id()), r);
     let text = crate::i18n::tr(section.empty_hint());
     let galley = ui.painter().layout_no_wrap(text.to_string(), t.font(12.5), t.text_dim);
@@ -381,36 +387,77 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// How many library photos have no file (Local browse records are not checked; see
 /// `cmd::missing::checked_path`). Checking stats every file, which on a network share takes
 /// seconds, so it runs on a worker thread: the count shown is the last finished one, refreshed
-/// at most every 5 s, and at once (after the running check) when the catalog changed.
+/// at most every 5 s, and at once (after the running check) when the catalog changed. The first
+/// count and a recount after a catalog change are pending sidebar work
+/// ([`super::fs_cached_running`]): the Missing Photos row they add or take away moves every row
+/// below it. The timed refresh is not: it rarely changes the count, and on a share where counting
+/// takes seconds, a headless run's fast simulated clock would start the next one before settling.
+/// A catalog change during a timed refresh is pending from the frame it is seen, although its
+/// recount starts only when the refresh ends.
 pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::AcqRel, Ordering::Relaxed};
     #[derive(Clone, Default)]
     struct Job {
         n: std::sync::Arc<AtomicUsize>,
         running: std::sync::Arc<AtomicBool>,
         at: f64,
         rev: u64,
+        /// A catalog change arrived while a count was running: its recount is pending work
+        /// already, held until the recount stores its result.
+        owed: bool,
     }
     let id = egui::Id::unique("missing-count");
     let now = ui.input(|i| i.time);
     let rev = app.session.catalog.revision;
     let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
+    let running = job.running.load(Relaxed);
+    if running && job.rev != rev && !job.owed {
+        // the recount waits for the running count (a timed refresh, not waited for), but settling
+        // must wait for it from now on
+        super::local::fs_running_counter(ui.ctx()).fetch_add(1, AcqRel);
+        job.owed = true;
+        ui.data_mut(|d| d.insert_temp(id, job.clone()));
+    }
     let fresh = now - job.at < 5.0 && job.rev == rev;
-    if !fresh && !job.running.load(Relaxed) {
+    if !fresh && !running {
         // the same scope as the Missing Photos view: library photos only, never Local browse records
         let paths = lightcraft_engine::cmd::missing::candidates(&app.session.catalog);
+        let pending = (job.rev != rev).then(|| super::local::fs_running_counter(ui.ctx()));
+        if let Some(p) = &pending
+            && !job.owed
+        {
+            p.fetch_add(1, AcqRel);
+        }
+        // the recount takes over the entry held while it waited
+        job.owed = false;
         job.running.store(true, Relaxed);
         job.at = now;
         job.rev = rev;
-        let (n, running, ctx) = (job.n.clone(), job.running.clone(), ui.ctx().clone());
+        #[cfg(test)]
+        let test_delay = app.missing_count_test_delay;
+        let (n, running, ctx, done) = (job.n.clone(), job.running.clone(), ui.ctx().clone(), pending.clone());
         let work = move || {
+            #[cfg(test)]
+            if let Some(d) = test_delay {
+                std::thread::sleep(d);
+            }
             let missing = if cfg!(target_arch = "wasm32") { 0 } else { paths.iter().filter(|p| !std::path::Path::new(p).exists()).count() };
             n.store(missing, Relaxed);
             running.store(false, Relaxed);
+            // after the count is stored: a frame that sees the pending count drop also sees the row
+            if let Some(d) = done {
+                d.fetch_sub(1, AcqRel);
+            }
             ctx.request_repaint();
         };
         #[cfg(not(target_arch = "wasm32"))]
-        std::thread::spawn(work);
+        if std::thread::Builder::new().name("lc-missing-count".into()).spawn(work).is_err() {
+            // no thread to spare: keep the last count and try again after the next 5 s
+            job.running.store(false, Relaxed);
+            if let Some(p) = &pending {
+                p.fetch_sub(1, AcqRel);
+            }
+        }
         #[cfg(target_arch = "wasm32")]
         work();
         ui.data_mut(|d| d.insert_temp(id, job.clone()));

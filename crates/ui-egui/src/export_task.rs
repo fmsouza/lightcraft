@@ -17,7 +17,18 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 
+/// Where a background export's files go once written (mobile hosts).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Handoff {
+    /// The system share sheet ([`crate::Services::share`]).
+    #[default]
+    Share,
+    /// The device's photo library ([`crate::Services::save_to_photos`]).
+    Photos,
+}
+
 pub struct ExportTask {
+    pub handoff: Handoff,
     pub total: usize,
     /// Photos started so far and the file in progress.
     pub progress: Arc<Mutex<(usize, String)>>,
@@ -81,7 +92,8 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard });
+    let handoff = app.export_handoff.unwrap_or_default();
+    app.export = Some(ExportTask { handoff, total, progress, cancel, rx, guard });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -128,7 +140,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { handoff: Handoff::Share, total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -181,7 +193,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { handoff: Handoff::Share, total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -232,6 +244,39 @@ pub fn poll_photos(app: &mut LightcraftApp, ctx: &egui::Context) {
 #[cfg(target_arch = "wasm32")]
 pub fn poll_photos(_: &mut LightcraftApp, _: &egui::Context) {}
 
+/// What a finished export says: how many files were written, skipped or failed, and the Apple Photos note.
+fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancelled: bool) -> String {
+    let sheet = files.first().filter(|f| f["contactSheet"] == true);
+    let ok = files.iter().filter(|f| f.get("path").is_some()).count();
+    let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
+    let skipped = files.iter().filter(|f| f.get("skipped").is_some()).count();
+    let mut m = crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
+    if let Some(sheet) = sheet {
+        m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
+    }
+    if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
+        m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
+    }
+    if skipped > 0 {
+        m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
+    }
+    if let Some(first) = failed.first() {
+        m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
+    }
+    let reduced = files.iter().filter(|f| f.get("reducedFrom").is_some()).count();
+    if reduced > 0 {
+        m += &crate::i18n::tr_format!(" · {reduced} made smaller to fit this device's memory", reduced = reduced);
+    }
+    if cancelled {
+        m += " · cancelled";
+    }
+    if let Some(photos) = photos {
+        m += " · ";
+        m += &apple_photos_note(photos);
+    }
+    m
+}
+
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
@@ -239,47 +284,24 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
+            let handoff = task.handoff;
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
             let msg = match r {
                 Ok((files, photos, _)) => {
-                    let sheet = files.first().filter(|f| f["contactSheet"] == true);
-                    let ok = files.iter().filter(|f| f.get("path").is_some()).count();
-                    let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
-                    let skipped = files.iter().filter(|f| f.get("skipped").is_some()).count();
-                    let mut m =
-                        crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
-                    if let Some(sheet) = sheet {
-                        m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
-                    }
-                    if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
-                        m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
-                    }
-                    if skipped > 0 {
-                        m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
-                    }
-                    if let Some(first) = failed.first() {
-                        m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
-                    }
-                    let reduced = files.iter().filter(|f| f.get("reducedFrom").is_some()).count();
-                    if reduced > 0 {
-                        m += &crate::i18n::tr_format!(" · {reduced} made smaller to fit this device's memory", reduced = reduced);
-                    }
-                    if cancelled {
-                        m += " · cancelled";
-                    }
-                    if let Some(photos) = &photos {
-                        m += " · ";
-                        m += &apple_photos_note(photos);
-                    }
+                    let m = export_summary(&files, photos.as_ref(), total, cancelled);
                     // mobile: offer what was written in the share sheet
                     let paths: Vec<String> = files.iter().filter_map(|f| f.get("path").and_then(Value::as_str)).map(str::to_string).collect();
+                    let hand = match handoff {
+                        Handoff::Share => app.services.share.as_mut(),
+                        Handoff::Photos => app.services.save_to_photos.as_mut(),
+                    };
                     if !cancelled
                         && !paths.is_empty()
-                        && let Some(share) = app.services.share.as_mut()
+                        && let Some(hand) = hand
                     {
-                        share(&paths);
+                        hand(&paths);
                     }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m

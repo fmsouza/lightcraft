@@ -1,23 +1,39 @@
 use super::general::{cameras, preset_combo};
-use super::widgets::{button_width, check, choices, heading, hint, path_label, row};
-use super::*;
+use super::widgets::{button_width, check, choices, field, heading, hint, named_row, path_label, row};
+use super::{LightcraftApp, RichText, Tokens, json, register};
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
     heading(ui, t, crate::i18n::tr("Raw defaults"));
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the library."));
-    row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
-        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", crate::i18n::tr("Raw default"), d.raw_preset.as_deref(), "LightCraft Default") {
+    named_row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
+        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", crate::i18n::tr("Raw photos"), d.raw_preset.as_deref(), "LightCraft Default") {
             let _ = app.run("library.preferences", json!({"import": {"rawPreset": v}}));
         }
     });
     let mut per = d.per_camera;
+    // (a phone or tablet keeps the two defaults; a default per camera body is a computer's job)
+    let mobile = super::mobile(app);
+    if !mobile {
+        per_camera(app, ui, t, &d, &mut per);
+    }
+    other_and_metadata(app, ui, t, &d);
+    // a phone or tablet app: the files sit in its own storage, which no other program reads, and
+    // nothing is dropped on it or plugged into it; the import settings stop here
+    if mobile {
+        return;
+    }
+    sidecars_and_auto(app, ui, t, &d);
+}
+
+/// Use camera-specific defaults, and the list of cameras with a default each.
+fn per_camera(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightcraft_engine::import::ImportDefaults, per: &mut bool) {
     row(ui, t, "", |ui| {
-        if check(ui, "settings.perCamera", &mut per, "Use camera-specific defaults") {
-            let _ = app.run("library.preferences", json!({"import": {"perCamera": per}}));
+        if check(ui, "settings.perCamera", per, "Use camera-specific defaults") {
+            let _ = app.run("library.preferences", json!({"import": {"perCamera": *per}}));
         }
     });
-    if per {
+    if *per {
         let cams = cameras(app);
         if cams.is_empty() {
             hint(ui, t, crate::i18n::tr("No raw photos yet: cameras appear here once their photos are in the library."));
@@ -65,9 +81,13 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+}
+
+/// The non-raw default, and the metadata added on import.
+fn other_and_metadata(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightcraft_engine::import::ImportDefaults) {
     heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
-    row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
-        if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Other preset"), d.other_preset.as_deref(), "None") {
+    named_row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
+        if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Non-raw photos"), d.other_preset.as_deref(), "None") {
             let _ = app.run("library.preferences", json!({"import": {"otherPreset": v}}));
         }
     });
@@ -79,19 +99,43 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         row(ui, t, label, |ui| {
             let id = egui::Id::unique(("settingsMeta", key));
             let mut text: String = ui.data(|m| m.get_temp(id)).unwrap_or(value.clone());
-            let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint_text).desired_width(240.0));
-            register(ui, format!("field:settings.{key}"), r.rect);
-            if r.lost_focus() && text.trim() != value {
+            // (the project's text field: Esc gives the text back and stays in Settings, and with
+            // the text back the line below has nothing to save)
+            let widget = format!("field:settings.{key}");
+            let shown = field(
+                ui,
+                crate::text_field::TextField::singleline(&widget, &mut text).hint(hint_text).width(if super::widgets::phone_list(ui) {
+                    ui.available_width()
+                } else {
+                    240.0
+                }),
+            );
+            if shown.committed() && text.trim() != value {
                 let _ = app.run("library.preferences", json!({"import": {key: text.trim()}}));
             }
-            if r.has_focus() {
+            if shown.editing {
                 ui.data_mut(|m| m.insert_temp(id, text));
             } else {
                 ui.data_mut(|m| m.remove::<String>(id));
             }
         });
     }
-    if !app.session.metadata_presets.is_empty() {
+    if !app.session.metadata_presets.is_empty() && super::widgets::phone_list(ui) {
+        let cur = d.metadata_preset.clone();
+        let shown = cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into());
+        let names: Vec<String> = app.session.metadata_presets.iter().map(|m| m.name.clone()).collect();
+        let mut options = vec![(crate::i18n::tr("None").to_string(), false)];
+        options.extend(names.iter().map(|n| (n.clone(), false)));
+        let at = match &cur {
+            None => Some(0),
+            Some(c) => names.iter().position(|n| n == c).map(|i| i + 1),
+        };
+        let pick = super::widgets::disclosure(ui, "settingsMetaPreset", "Metadata preset", &shown, options, at)
+            .map(|i| if i == 0 { String::new() } else { names.get(i - 1).cloned().unwrap_or_default() });
+        if let Some(n) = pick {
+            let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
+        }
+    } else if !app.session.metadata_presets.is_empty() {
         row(ui, t, crate::i18n::tr("Metadata preset"), |ui| {
             let cur = d.metadata_preset.clone();
             let mut pick = None;
@@ -115,6 +159,10 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+}
+
+/// XMP sidecars, dropped files, cameras and cards, the watched folder.
+fn sidecars_and_auto(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, d: &lightcraft_engine::import::ImportDefaults) {
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
@@ -163,6 +211,15 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 let _ = app.run("library.autoImport", json!({"folder": null}));
             }
         });
+        // the last listing of the watched folder failed: say why (it reads "OS error: reason")
+        if let (Some(folder), Some((failed, e))) = (&d.auto_folder, &app.ui.auto_import_error)
+            && folder == failed
+        {
+            let reason = e.strip_prefix(folder.as_str()).and_then(|r| r.strip_prefix(": ")).unwrap_or(e);
+            row(ui, t, "", |ui| {
+                ui.label(RichText::new(crate::i18n::tr_format!("Can't read this folder: {}", reason)).size(11.0).color(t.caution));
+            });
+        }
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
                 let mut copy = d.auto_copy;
@@ -171,10 +228,14 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 }
             });
             row(ui, t, crate::i18n::tr("Album"), |ui| {
-                let id = egui::Id::unique("auto-album");
+                // (per library: a name left here by one library is not another's)
+                let id = egui::Id::unique(("auto-album", app.session.library.as_ref().map(|l| l.dir.clone())));
                 let mut name = ui.data(|m| m.get_temp::<String>(id)).unwrap_or_else(|| d.auto_album.clone().unwrap_or_default());
-                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("None")).desired_width(180.0));
-                if r.lost_focus() {
+                let shown = field(
+                    ui,
+                    crate::text_field::TextField::singleline("field:settingsAutoAlbum", &mut name).hint(crate::i18n::tr("None")).width(180.0),
+                );
+                if shown.committed() {
                     let _ = app.run("library.autoImport", json!({"album": name.trim()}));
                 }
                 ui.data_mut(|m| m.insert_temp(id, name));

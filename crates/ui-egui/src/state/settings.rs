@@ -1,7 +1,7 @@
 use super::view::LoupeInfo;
 #[cfg(test)]
 use super::view::{InfoOverlay, LoupeInfoField};
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// Which view the app opens in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +136,8 @@ pub struct AppSettings {
     pub import_dropped_directly: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
+    /// Use Windows DirectComposition to prevent VRR flicker; applies at next launch.
+    pub compose_window: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
     /// drawn at, up to the photo's own pixels and [`LOUPE_EDGE_CEILING`]). Not the old
     /// `previewEdge` key: its 2560 px default was the soft-image bug (issue #323).
@@ -164,6 +166,9 @@ pub struct AppSettings {
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
+    /// Interface ▸ Show touches: a dot where each finger is and a ring where it lifted, for
+    /// screen recordings (they don't show touches). Phones and tablets.
+    pub show_touches: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -220,6 +225,7 @@ impl Default for AppSettings {
             close_dialogs_outside: false,
             import_dropped_directly: false,
             gpu: true,
+            compose_window: false,
             preview_limit: 0,
             external_editor: String::new(),
             external_file: EditFile::default(),
@@ -231,6 +237,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             loupe_messages: true,
+            show_touches: false,
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,

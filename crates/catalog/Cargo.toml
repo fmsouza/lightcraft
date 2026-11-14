@@ -20,10 +20,16 @@ log = { workspace = true }
 chrono = { workspace = true }
 web-time = { workspace = true }
 
+# Android's std has no file locks (`File::try_lock` is unsupported there): flock through rustix,
+# pure Rust and safe
+[target.'cfg(target_os = "android")'.dependencies]
+rustix = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 winapi-util = { workspace = true }
 
 [dev-dependencies]
+dhat = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::text::{TEXT_FONT as WATERMARK_FONT, cell_glyphs as watermark_cell_glyphs, faces as watermark_fonts};
 
 mod batch;
+mod border;
 mod encoding;
 mod options;
 mod params;
@@ -25,6 +26,7 @@ mod watermark;
 #[cfg(test)]
 use batch::run_batch_with;
 pub use batch::{export_parallelism, run_batch};
+pub use border::{BORDER_MAX_RATIO, BORDER_THICKNESS_RANGE, Border, add_border, add_border_deep};
 pub use encoding::{
     encode_deep, encode_gain_map_jpeg, encode_image, encode_rendered, encode_with_metadata, export_metadata, named_space, output_sharpen,
     output_sharpen_deep, removes_location, srgb8_in,
@@ -34,7 +36,7 @@ pub use options::{
     SharpenFor, builtin_presets,
 };
 pub use params::{
-    OPTION_PARAMS, TARGET_PARAMS, WATERMARK_IMAGE_WIDTH_RANGE, WATERMARK_INSET_RANGE, WATERMARK_PARAMS, WATERMARK_SIZE_RANGE,
+    BORDER_PARAMS, OPTION_PARAMS, TARGET_PARAMS, WATERMARK_IMAGE_WIDTH_RANGE, WATERMARK_INSET_RANGE, WATERMARK_PARAMS, WATERMARK_SIZE_RANGE,
     apple_photos_unsupported,
 };
 #[cfg(test)]
@@ -112,6 +114,8 @@ pub struct ExportOptions {
     pub photos_album: String,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
+    /// A plain border round the photo, drawn last (none when absent).
+    pub border: Option<Border>,
 }
 
 #[cfg(test)]

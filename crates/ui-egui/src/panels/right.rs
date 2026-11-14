@@ -59,6 +59,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             return;
         };
+        // the Edit panel's histogram stays above its sliders as they scroll (#2679); a phone
+        // shows it over the photo instead (`edit::histogram_overlay`)
+        if app.ui.right == RightPanel::Edit && app.ui.histogram && !super::compact::is_compact(ui.ctx()) {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            super::edit::histogram(app, ui, id);
+        }
         let mut area = egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]);
         if let Some(offset) = held {
             area = area.vertical_scroll_offset(offset);
@@ -112,6 +118,11 @@ fn held_offset(ctx: &egui::Context) -> Option<f32> {
 }
 
 pub fn header(ui: &mut egui::Ui, title: &str) {
+    // the phone's sheet names its tool in its own header already (a heading within the panel,
+    // Crop's Geometry, stays)
+    if crate::panels::compact::is_compact(ui.ctx()) && matches!(title, "Crop" | "Masking" | "Remove" | "Red Eye" | "Info" | "Versions" | "History") {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
     ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);

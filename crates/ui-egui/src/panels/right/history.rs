@@ -1,11 +1,23 @@
-use super::*;
+use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Sense, Tokens, header, json, padded, paint, pos2, register, text_button, vec2};
 
 pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Versions");
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
-        if text_button(ui, "versionCreate", crate::i18n::tr("Create Version"), false).clicked() {
+        // (a phone: the system's full-width button)
+        let create = if crate::panels::settings::phone_list(ui) {
+            crate::panels::settings::phone_button(
+                ui,
+                "versionCreate",
+                crate::i18n::tr("Create Version"),
+                crate::panels::settings::PhoneButton::Tinted,
+                true,
+            )
+        } else {
+            text_button(ui, "versionCreate", crate::i18n::tr("Create Version"), false).clicked()
+        };
+        if create {
             let _ = app.run("version.create", json!({}));
         }
         ui.add_space(8.0);

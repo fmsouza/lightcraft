@@ -397,6 +397,12 @@ impl Headless {
         self.view.painted_text()
     }
 
+    /// Let `seconds` pass with no frames (a host that waits for the next repaint it was asked for).
+    #[cfg(test)]
+    pub(crate) fn wait(&mut self, seconds: f64) {
+        self.time += seconds;
+    }
+
     /// `app.quit` was requested.
     pub fn quit_requested(&self) -> bool {
         self.quit
@@ -560,6 +566,14 @@ impl Headless {
         }
     }
 
+    /// Queue a control-protocol request without running a frame: the answer comes on the returned
+    /// channel once a frame ([`Self::step`]) has taken the request up, and the work it starts is done.
+    pub(crate) fn send(&mut self, method: &str, params: Value) -> Result<std::sync::mpsc::Receiver<Value>, Value> {
+        let (req, rx) = ControlRequest::new(method, params);
+        self.control.send(req).map_err(|_| json!({"ok": false, "error": "control channel closed"}))?;
+        Ok(rx)
+    }
+
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
     /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
@@ -570,10 +584,10 @@ impl Headless {
         {
             self.wait_for_widget(id, timeout.min(WIDGET_WAIT));
         }
-        let (req, rx) = ControlRequest::new(method, params);
-        if self.control.send(req).is_err() {
-            return json!({"ok": false, "error": "control channel closed"});
-        }
+        let rx = match self.send(method, params) {
+            Ok(rx) => rx,
+            Err(e) => return e,
+        };
         let t0 = Instant::now();
         let reply = loop {
             self.step();

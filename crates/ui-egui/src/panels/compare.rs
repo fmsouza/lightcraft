@@ -2,7 +2,7 @@
 //! pan) and **Survey** (the selected photos tiled). Rating, flag and label keys act on the active
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::{Flag, PhotoId};
 use serde_json::{Value, json};
 
@@ -187,13 +187,26 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
 
 fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
     let full = ui.max_rect();
-    let film_h = if app.ui.filmstrip { super::detail::film_height(ui.ctx(), full) } else { 0.0 };
+    // a phone has no filmstrip (as in its editor): the room goes to the photos
+    let film = app.ui.filmstrip && !super::compact::is_compact(ui.ctx());
+    let film_h = if film { super::detail::film_height(ui.ctx(), full) } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
-    if app.ui.filmstrip {
+    if film {
         super::detail::filmstrip(app, ui, Rect::from_min_max(pos2(full.left(), canvas.bottom()), full.max));
     }
     canvas
+}
+
+/// Ask for the render of a tile (about `want` pixels on its long edge) and for the thumbnail shown meanwhile.
+fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: usize, aspect: f32) {
+    let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
+    if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
+        app.renderer.request(slot, job, 60);
+    }
+    if let Some(job) = app.session.thumb_job(id, 256) {
+        app.renderer.request(Slot::Thumb(id), job, 30);
+    }
 }
 
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
@@ -229,13 +242,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
-    let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
-    if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
-        app.renderer.request(slot, job, 60);
-    }
-    if let Some(job) = app.session.thumb_job(id, 256) {
-        app.renderer.request(Slot::Thumb(id), job, 30);
-    }
+    request_tile_renders(app, id, slot, want, aspect);
     // zoomed past what that render holds (1:1 to check focus): the part on screen as a window, as
     // in the loupe. Compare and Reference only; Survey tiles are fit views.
     let pane = match slot {
@@ -280,7 +287,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else {
-        p.rect_filled(img.intersect(img_area), 0.0, Tokens::get(ui.ctx()).skeleton);
+        p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
@@ -290,7 +297,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     }
     let active = app.session.selection.active == Some(id);
     if active {
-        p.rect_stroke(display.intersect(img_area.shrink(1.0)), 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+        super::grid::selection_ring(&p, &t, display.intersect(img_area.shrink(3.0)), lightcraft_engine::SelectionState::Active);
     }
     // Compare and Reference are where sharpness is judged: as in the loupe, say when what is on
     // screen isn't the render on its way (a thumbnail, the last render after an edit, a magnified
@@ -501,12 +508,24 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         super::empty_message(ui, canvas, "Nothing to compare", "Select two photos, then choose View → Compare (Shift+C)");
         return;
     };
-    let area = canvas.shrink(18.0);
-    let half = (area.width() - 16.0) / 2.0;
-    let panes = [
-        (sel, Rect::from_min_size(area.min, vec2(half, area.height())), "Select", 0u8),
-        (cand, Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height())), "Candidate", 1u8),
-    ];
+    // a phone held upright: Select above Candidate (side by side they'd be slivers), and a bar of
+    // finger-sized buttons for what the desktop does with keys and the filmstrip
+    let upright = super::compact::is_compact(ui.ctx()) && canvas.width() < super::compact::COMPACT_WIDTH;
+    let canvas = if upright { phone_bar(app, ui, canvas, sel, cand) } else { canvas };
+    let area = canvas.shrink(if upright { 8.0 } else { 18.0 });
+    let panes = if upright {
+        let half = (area.height() - 12.0) / 2.0;
+        [
+            (sel, Rect::from_min_size(area.min, vec2(area.width(), half)), "Select", 0u8),
+            (cand, Rect::from_min_size(pos2(area.left(), area.bottom() - half), vec2(area.width(), half)), "Candidate", 1u8),
+        ]
+    } else {
+        let half = (area.width() - 16.0) / 2.0;
+        [
+            (sel, Rect::from_min_size(area.min, vec2(half, area.height())), "Select", 0u8),
+            (cand, Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height())), "Candidate", 1u8),
+        ]
+    };
     let zoom = app.ui.zoom;
     for (id, r, label, i) in panes {
         let (img, resp) = photo_tile(app, ui, id, Slot::Compare(i), r, label, zoom);
@@ -530,8 +549,97 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             super::grid::context_menu(app, ui, id);
         });
     }
-    let mid = area.center().x;
-    ui.painter().line_segment([pos2(mid, area.top()), pos2(mid, area.bottom())], Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
+    let divider = Stroke::new(1.0, Tokens::get(ui.ctx()).divider);
+    if upright {
+        let mid = area.center().y;
+        ui.painter().line_segment([pos2(area.left(), mid), pos2(area.right(), mid)], divider);
+    } else {
+        let mid = area.center().x;
+        ui.painter().line_segment([pos2(mid, area.top()), pos2(mid, area.bottom())], divider);
+    }
+}
+
+/// The phone's Compare bar along the bottom of `canvas`: the previous and next candidate, Swap,
+/// Rate (the Rate sheet, for the photo last tapped) and Make Candidate the Select. Returns what is
+/// left above it for the photos.
+fn phone_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, sel: PhotoId, cand: PhotoId) -> Rect {
+    let buttons: [(&str, Icon, &str); 5] = [
+        ("comparePrevious", Icon::ChevronLeft, "Previous"),
+        ("compareSwap", Icon::Flip, "Swap"),
+        ("compareRate", Icon::Star, "Rate"),
+        ("compareMakeSelect", Icon::Check, "Make Select"),
+        ("compareNext", Icon::ChevronRight, "Next"),
+    ];
+    let (rest, pressed) = button_bar(ui, canvas, "panel:compareBar", &buttons);
+    if let Some(id) = pressed {
+        let r = match id {
+            "comparePrevious" => compare_step(app, -1),
+            "compareNext" => compare_step(app, 1),
+            "compareSwap" => swap(app),
+            "compareMakeSelect" => make_select(app),
+            _ => {
+                // the photo last tapped (the Candidate until one is)
+                let rate = app.session.active().filter(|a| *a == sel || *a == cand).unwrap_or(cand);
+                super::rate_sheet::open(ui.ctx(), vec![rate]);
+                Ok(Value::Null)
+            }
+        };
+        if let Err(e) = r {
+            app.toast(ui.ctx(), e);
+        }
+    }
+    rest
+}
+
+/// A phone's bar of finger-sized buttons (an icon over its name) along the bottom of `canvas`,
+/// registered as `panel` and `button:<id>`: what is left above it, and the button tapped.
+fn button_bar(ui: &mut egui::Ui, canvas: Rect, panel: &str, buttons: &[(&'static str, Icon, &str)]) -> (Rect, Option<&'static str>) {
+    const BAR_H: f32 = 60.0;
+    let t = Tokens::get(ui.ctx());
+    let bar = Rect::from_min_max(pos2(canvas.left(), canvas.bottom() - BAR_H), canvas.max);
+    ui.painter().rect_filled(bar, 0.0, t.chrome);
+    register(ui, panel, bar);
+    let w = bar.width() / buttons.len().max(1) as f32;
+    let mut pressed = None;
+    for (i, (id, icon, label)) in buttons.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(bar.left() + i as f32 * w, bar.top()), vec2(w, BAR_H));
+        let resp = ui.interact(r, egui::Id::unique(("phone-bar", *id)), Sense::click());
+        register(ui, format!("button:{id}"), r);
+        crate::widgets::announce(&resp, crate::i18n::tr(label));
+        let p = ui.painter();
+        if resp.is_pointer_button_down_on() {
+            p.rect_filled(r.shrink(2.0), 8.0, t.hover);
+        }
+        paint(p, Rect::from_center_size(pos2(r.center().x, r.top() + 22.0), vec2(20.0, 20.0)), *icon, t.icon);
+        p.text(pos2(r.center().x, r.bottom() - 12.0), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(11.0), t.text_label);
+        if resp.clicked() {
+            pressed = Some(*id);
+        }
+    }
+    (Rect::from_min_max(canvas.min, pos2(canvas.right(), bar.top())), pressed)
+}
+
+/// The phone's Survey bar: Rate (the Rate sheet), Remove from the survey and Edit (the editor),
+/// for the photo last tapped (the first until one is). Returns what is left above it.
+fn survey_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, photos: &[PhotoId]) -> Rect {
+    let buttons: [(&str, Icon, &str); 3] =
+        [("surveyRate", Icon::Star, "Rate"), ("surveyRemove", Icon::Close, "Remove"), ("surveyEdit", Icon::Pencil, "Edit")];
+    let (rest, pressed) = button_bar(ui, canvas, "panel:surveyBar", &buttons);
+    let Some(id) = pressed else { return rest };
+    let Some(target) = app.session.selection.active.filter(|a| photos.contains(a)).or_else(|| photos.first().copied()) else { return rest };
+    match id {
+        "surveyRate" => super::rate_sheet::open(ui.ctx(), vec![target]),
+        // (the last photo stays: a survey of none is no survey)
+        "surveyRemove" if photos.len() > 1 => {
+            let _ = app.run("library.select", json!({"ids": [target.0], "mode": "toggle"}));
+        }
+        "surveyEdit" => {
+            let _ = app.run("library.select", json!({"ids": [target.0]}));
+            app.ui.view = ViewMode::Detail;
+        }
+        _ => {}
+    }
+    rest
 }
 
 /// Columns for `n` tiles of aspect ~3:2 in `area`, maximizing the tile size.
@@ -557,6 +665,8 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         super::empty_message(ui, canvas, "Nothing to survey", "Select photos, then choose View → Survey (N)");
         return;
     }
+    let upright = super::compact::is_compact(ui.ctx()) && canvas.width() < super::compact::COMPACT_WIDTH;
+    let canvas = if upright { survey_bar(app, ui, canvas, &photos) } else { canvas };
     let area = canvas.shrink(14.0);
     let cols = survey_columns(photos.len(), area);
     let rows = photos.len().div_ceil(cols);
@@ -568,7 +678,12 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if app.session.selection.active == Some(*id) {
             app.image_rect = Some(img);
         }
-        if resp.clicked() {
+        // ⌘/Ctrl-click removes the photo from the survey (deselects it), as the × does
+        if resp.clicked() && ui.input(|i| i.modifiers.command) {
+            if photos.len() > 1 {
+                let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
+            }
+        } else if resp.clicked() {
             app.session.selection.active = Some(*id);
         }
         if resp.double_clicked() {
@@ -577,11 +692,15 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         // remove from the survey (deselect) on hover; always there on a touch screen
         if (resp.hovered() || crate::widgets::touch_screen(ui.ctx())) && photos.len() > 1 {
-            let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
-            let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
+            // (a finger's: a larger circle, and a 44 pt target round it)
+            let d = if upright { 30.0 } else { 20.0 };
+            let xr = Rect::from_min_size(pos2(img.right() - d - 6.0, img.top() + 6.0), vec2(d, d));
+            let hit = if upright { xr.expand(7.0) } else { xr };
+            let xresp = ui.interact(hit, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
+            register(ui, format!("button:surveyX:{}", id.0), hit);
             crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
-            ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
-            paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);
+            ui.painter().circle_filled(xr.center(), d / 2.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
+            paint(ui.painter(), xr.shrink(d * 0.2), Icon::Close, t.text);
             if xresp.clicked() {
                 let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }

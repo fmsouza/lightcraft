@@ -1,6 +1,9 @@
 use super::options::{ExportFormat, MetadataPolicy, SharpenAmount, SharpenFor};
 use super::watermark::{Watermark, draw_watermark, draw_watermark_deep};
-use super::*;
+use super::{
+    ChromaSubsampling, DateTime, DeepImage, DeepSamples, EncodeImage, EncodeMeta, ExportOptions, Gps, Metadata, NamedSpace, OutputDepth, OutputSpace,
+    Rgba8, Samples, encode, icc,
+};
 use std::borrow::Cow;
 
 /// Unsharp mask on an 8-bit image (separable box-blur approximation of a small Gaussian).
@@ -155,10 +158,10 @@ fn encode_jpeg_with_limit(o: &ExportOptions, jpeg: impl Fn(u8) -> lightcraft_cod
     best.ok_or_else(|| format!("cannot fit within {kb} KB"))
 }
 
-/// Output sharpening and the watermark on an 8-bit render in `o.effective_space()`: the render itself when
+/// Output sharpening, the watermark and the border on an 8-bit render in `o.effective_space()`: the render itself when
 /// there is neither (a copy is ~100 MB at 24 MP).
 fn finish_8bit<'a>(img: &'a Rgba8, o: &ExportOptions) -> Cow<'a, Rgba8> {
-    if o.watermark.is_none() && !sharpens(img.width, img.height, o.sharpen) {
+    if o.watermark.is_none() && o.border.is_none() && !sharpens(img.width, img.height, o.sharpen) {
         return Cow::Borrowed(img);
     }
     let mut img = img.clone();
@@ -168,12 +171,15 @@ fn finish_8bit<'a>(img: &'a Rgba8, o: &ExportOptions) -> Cow<'a, Rgba8> {
         let wm = Watermark { color: srgb8_in(space, wm.color), target: Some(space), ..wm.clone() };
         draw_watermark(&mut img, &wm);
     }
+    if let Some(b) = &o.border {
+        img = super::border::add_border(&img, b, space);
+    }
     Cow::Owned(img)
 }
 
-/// Output sharpening and the watermark on a high-bit-depth render (the render itself when there is neither).
+/// Output sharpening, the watermark and the border on a high-bit-depth render (the render itself when there is none).
 fn finish_deep<'a>(img: &'a DeepImage, o: &ExportOptions) -> Cow<'a, DeepImage> {
-    if o.watermark.is_none() && !sharpens(img.width, img.height, o.sharpen) {
+    if o.watermark.is_none() && o.border.is_none() && !sharpens(img.width, img.height, o.sharpen) {
         return Cow::Borrowed(img);
     }
     let mut img = img.clone();
@@ -181,6 +187,9 @@ fn finish_deep<'a>(img: &'a DeepImage, o: &ExportOptions) -> Cow<'a, DeepImage> 
     if let Some(wm) = &o.watermark {
         let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
         draw_watermark_deep(&mut img, &wm);
+    }
+    if let Some(b) = &o.border {
+        img = super::border::add_border_deep(&img, b);
     }
     Cow::Owned(img)
 }
