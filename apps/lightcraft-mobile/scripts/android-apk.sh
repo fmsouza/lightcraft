@@ -15,8 +15,10 @@ BIN=$(ls -d "$NDK"/toolchains/llvm/prebuilt/*/bin)
 export CC_aarch64_linux_android="$BIN/aarch64-linux-android$API-clang"
 export AR_aarch64_linux_android="$BIN/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$BIN/aarch64-linux-android$API-clang"
-$CARGO build --release -p lightcraft-mobile --lib --target aarch64-linux-android
-OUT=${CARGO_TARGET_DIR:-target}/aarch64-linux-android/release
+# PROFILE=release keeps symbols (mobile by default: optimized and stripped)
+PROFILE=${PROFILE:-mobile}
+$CARGO build --profile "$PROFILE" -p lightcraft-mobile --lib --target aarch64-linux-android
+OUT=${CARGO_TARGET_DIR:-target}/aarch64-linux-android/$PROFILE
 WORK=$OUT/apk
 rm -rf "$WORK" && mkdir -p "$WORK/stage/lib/arm64-v8a"
 cp "$OUT/liblightcraft_mobile.so" "$WORK/stage/lib/arm64-v8a/"

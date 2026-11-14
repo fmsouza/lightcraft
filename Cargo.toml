@@ -154,6 +154,16 @@ debug = false
 # unit, no symbols, abort on panic (wasm32 can't unwind anyway), size-optimized code — except the
 # crates that do per-pixel work, which stay at opt-level 3 (opt-level "s"/"z" there costs ~50 %/
 # ~130 % render time; measured in docs/web.md → Bundle size).
+# Phone builds (apps/lightcraft-mobile/scripts): the shipping settings without debug info or
+# symbols, which made the app binary over 70 MB. Stripped crash reports have no line numbers:
+# build with PROFILE=release to debug one.
+[profile.mobile]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+debug = false
+strip = "symbols"
+
 [profile.web]
 inherits = "release"
 debug = false
