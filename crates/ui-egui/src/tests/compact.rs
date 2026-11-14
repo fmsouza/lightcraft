@@ -402,8 +402,9 @@ fn phone_tap_hides_the_editor_and_double_tap_zooms_to_100_and_back() {
         let c = loupe(h).center();
         touch_drag(h, c, c, 0);
     };
+    // the time for a second tap (0.5 s), then the photo's glide to its new room (0.22 s)
     let wait = |h: &mut Headless| {
-        for _ in 0..40 {
+        for _ in 0..60 {
             h.step();
         }
     };
@@ -2413,4 +2414,49 @@ fn phone_histogram_is_over_the_photo() {
     assert!(h.app.run("view.histogram", json!({})).is_ok());
     h.step();
     assert!(widget(&h, "histogramOverlay").is_none(), "View > Histogram takes it off");
+}
+
+#[test]
+fn phone_bars_come_back_fading_in_as_the_photo_glides() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    touch_screen(&mut h);
+    let small = loupe(&h);
+    let at = small.center();
+    touch_drag(&mut h, at, at, 0);
+    h.wait(0.5);
+    for _ in 0..30 {
+        h.step();
+    }
+    assert!(crate::panels::compact::chrome_hidden(&h.view.ctx));
+    let large = loupe(&h);
+    assert!(large.width() > small.width() + 50.0, "the photo takes the screen: {small:?} → {large:?}");
+    touch_drag(&mut h, at, at, 0);
+    h.wait(0.5);
+    h.step();
+    h.step();
+    assert!(!crate::panels::compact::chrome_hidden(&h.view.ctx));
+    // the next frames: the photo on its way, the tool row not yet all there
+    let mut between = 0;
+    let mut faint = false;
+    for _ in 0..8 {
+        h.step();
+        let w = loupe(&h).width();
+        between += usize::from(w < large.width() - 1.0 && w > small.width() + 1.0);
+        // the photo itself stays at full strength (it is drawn after the chrome, in the same ui)
+        let photo_dimmed = h.view.painted_shapes().iter().any(|s| {
+            matches!(s, egui::epaint::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() && m.vertices.first().is_some_and(|v| v.color.a() < 250))
+        });
+        assert!(!photo_dimmed, "the photo doesn't fade with the bars");
+        faint |= h
+            .view
+            .painted_shapes()
+            .iter()
+            .any(|s| matches!(s, egui::epaint::Shape::Text(t) if t.galley.text() == "Light" && t.fallback_color.a() < 200));
+    }
+    assert!(between >= 3, "the photo glides ({between} frames between {small:?} and {large:?})");
+    assert!(faint, "the tool row fades in");
+    for _ in 0..30 {
+        h.step();
+    }
+    assert_eq!(loupe(&h), small, "back where it was");
 }

@@ -1159,6 +1159,8 @@ fn phone_taps(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, zoom: b
         Some(at) if now - at >= wait => {
             ctx.data_mut(|d| d.remove_temp::<f64>(pending));
             crate::panels::compact::toggle_chrome(ctx);
+            // the photo glides to its new room (the whole screen, or between the bars and a sheet)
+            app.ui.zoom_anim = true;
         }
         // woken when the time for a second tap is up, not a whole wait after this frame
         Some(at) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait - (now - at))),

@@ -119,9 +119,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let hidden = detail && chrome_hidden(ui.ctx());
     let cover = hidden && app.ui.right == RightPanel::Crop;
+    // they go at once and come back fading in, as the photo glides between its rooms
+    let shown = ui.ctx().animate_bool_with_time(egui::Id::unique("compact-chrome-shown"), !hidden, 0.2);
     if hidden && !cover {
         sideways_photo(app, ui.ctx());
         return;
+    }
+    // (only the chrome: the caller draws the photo into this same `ui` afterwards)
+    let opacity = ui.opacity();
+    if !hidden && shown < 1.0 {
+        ui.multiply_opacity(shown);
     }
     if detail {
         editor_bar(app, ui);
@@ -160,6 +167,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         cover_chrome(ui.ctx(), ui.available_rect_before_wrap());
     }
     sideways_photo(app, ui.ctx());
+    ui.set_opacity(opacity);
 }
 
 /// Whether the phone editor shows its photo alone, turned to fill the screen: the phone is held
