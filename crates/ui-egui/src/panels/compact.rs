@@ -770,6 +770,9 @@ pub fn chrome_hidden(ctx: &egui::Context) -> bool {
 pub(crate) fn toggle_chrome(ctx: &egui::Context) {
     let hidden = !chrome_hidden(ctx);
     ctx.data_mut(|d| d.insert_temp(chrome_hidden_id(), hidden));
+    // flipped after the bars were laid out (a tap is seen late in the frame): draw the next frame
+    // now, or the flip waits for whatever wakes the app next (an idle phone draws nothing)
+    ctx.request_repaint();
 }
 
 /// Crop with the editor's chrome hidden: the bars and sheet keep their room, so the photo stays

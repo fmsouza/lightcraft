@@ -2460,3 +2460,34 @@ fn phone_bars_come_back_fading_in_as_the_photo_glides() {
     }
     assert_eq!(loupe(&h), small, "back where it was");
 }
+
+#[test]
+fn phone_tap_that_shows_the_bars_draws_them_without_waiting_for_another_wake() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    touch_screen(&mut h);
+    let at = loupe(&h).center();
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for hide in [true, false] {
+        h.wait(2.0);
+        h.step();
+        h.input([finger(1, egui::TouchPhase::Start, at), egui::Event::PointerMoved(at), button(true)]);
+        h.step();
+        h.input([finger(1, egui::TouchPhase::End, at), button(false), egui::Event::PointerGone]);
+        h.step();
+        h.step();
+        // the frame the app asked for once the time for a second tap is up flips the bars, after
+        // they were laid out: it must ask for the frame that draws them (nothing else wakes the app)
+        h.wait(0.35);
+        h.step();
+        assert_eq!(crate::panels::compact::chrome_hidden(&h.view.ctx), hide);
+        // (the demo photo's renders ask for frames here too, so look for the flip's own request;
+        // causes show a frame late)
+        h.step();
+        let causes = h.view.ctx.repaint_causes();
+        assert!(
+            causes.iter().any(|c| c.file.ends_with("panels/compact.rs")),
+            "a frame to draw the bars {}: {causes:?}",
+            if hide { "hidden" } else { "back" }
+        );
+    }
+}

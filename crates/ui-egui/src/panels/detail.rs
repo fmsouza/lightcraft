@@ -1149,6 +1149,8 @@ fn phone_taps(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, zoom: b
             app.ui.zoom = Zoom::Fit;
         }
         app.ui.zoom_anim = true;
+        // (as `toggle_chrome`: the photo was laid out at the old zoom)
+        ctx.request_repaint();
         return;
     }
     // (the lift that ends a hold on the photo isn't a tap)
