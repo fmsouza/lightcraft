@@ -1708,8 +1708,7 @@ fn phone_held_sideways_shows_the_photo_alone_turned() {
     let id = h.app.session.active().expect("a photo");
     assert!(widget(&h, "photo:sideways").is_none(), "upright: the editor");
     h.app.device_turn = 1;
-    h.step();
-    h.step();
+    settle(&mut h);
     let shown = widget(&h, "photo:sideways").expect("sideways: the photo alone");
     // a quarter turn swaps the photo's sides on the screen
     let p = h.app.session.catalog.photo(id).expect("photo");
@@ -1722,6 +1721,32 @@ fn phone_held_sideways_shows_the_photo_alone_turned() {
     h.step();
     h.step();
     assert!(widget(&h, "photo:sideways").is_none());
+}
+
+#[test]
+fn phone_turned_sideways_the_photo_turns_from_its_place_and_back() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    let from = loupe(&h);
+    h.app.device_turn = 1;
+    // a frame for the turn to start, then about half way (0.4 s for a quarter)
+    for _ in 0..13 {
+        h.step();
+    }
+    let mid = widget(&h, "photo:sideways").expect("turning");
+    settle(&mut h);
+    let end = widget(&h, "photo:sideways").expect("turned");
+    // (the photo's long side, whichever way it runs on the screen)
+    let long = |r: egui::Rect| r.width().max(r.height());
+    assert!(long(mid) > long(from) + 1.0 && long(mid) < long(end) - 1.0, "on its way: {from:?} → {mid:?} → {end:?}");
+    assert!((mid.center().y - from.center().y).abs() > 1.0 || from.center() == end.center(), "it moves towards the middle: {mid:?}");
+    // turned back: it turns back to the editor, then the editor is all there is
+    h.app.device_turn = 0;
+    h.step();
+    h.step();
+    assert!(painted_images(&h).iter().any(|r| r.width().max(r.height()) > long(from) + 1.0), "still turning back");
+    settle(&mut h);
+    assert!(widget(&h, "photo:sideways").is_none());
+    assert_eq!(loupe(&h), from, "the editor as it was");
 }
 
 #[test]
@@ -1746,8 +1771,7 @@ fn phone_held_sideways_a_swipe_along_the_photo_steps_through_them() {
     let first = h.app.session.active();
     for turn in [1i8, -1] {
         h.app.device_turn = turn;
-        h.step();
-        h.step();
+        settle(&mut h);
         let c = widget(&h, "photo:sideways").expect("sideways").center();
         // to the next photo: the way the photo's right edge faces, towards its left
         let towards_next = egui::vec2(0.0, -200.0 * f32::from(turn));

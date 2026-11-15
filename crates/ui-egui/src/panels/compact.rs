@@ -189,43 +189,99 @@ pub fn sideways(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 /// ([`super::detail::swipe`]). The editor goes on underneath (its renders keep coming); this
 /// covers it and takes the touches.
 fn sideways_photo(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if !sideways(app, ctx) {
-        return;
-    }
+    let want = sideways(app, ctx);
+    let Some((shown, turn)) = turning(ctx, want, app.device_turn.signum()) else { return };
     let Some(id) = app.session.active() else { return };
     let screen = ctx.viewport_rect();
     let room = ctx.content_rect();
-    let turn = app.device_turn.signum();
     // turned a quarter, the photo's width runs down the screen
     let pitch = room.height() + super::detail::swipe::GAP;
     let [previous, next] = super::detail::neighbours(app);
+    // where the turn starts from: the photo where the editor has it
+    let from = app.image_rect;
     egui::Area::new(egui::Id::unique("compact-sideways")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let (_, resp) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
-        let track = super::detail::swipe::Track { axis: along_turned, turn, pitch, has_previous: previous.is_some(), has_next: next.is_some() };
-        let (step, _) = super::detail::swipe::track(ui, &resp, &track);
-        let offset = super::detail::swipe::offset(ctx);
-        ui.painter().rect_filled(screen, 0.0, egui::Color32::BLACK);
+        let mut step = None;
+        if want {
+            let track = super::detail::swipe::Track { axis: along_turned, turn, pitch, has_previous: previous.is_some(), has_next: next.is_some() };
+            step = super::detail::swipe::track(ui, &resp, &track).0;
+        }
+        let offset = if want { super::detail::swipe::offset(ctx) } else { 0.0 };
+        ui.painter().rect_filled(screen, 0.0, egui::Color32::BLACK.gamma_multiply(shown));
         // top to the left: the photo's top faces the screen's right (a clockwise quarter)
-        let angle = f32::from(turn) * std::f32::consts::FRAC_PI_2;
-        for (photo, at) in [(Some(id), offset), (previous, offset - pitch), (next, offset + pitch)] {
+        let angle = f32::from(turn) * std::f32::consts::FRAC_PI_2 * shown;
+        // (the neighbours only once it has turned: mid-turn the photo is alone)
+        let neighbours = if shown >= 1.0 { [(previous, offset - pitch), (next, offset + pitch)] } else { [(None, 0.0); 2] };
+        for (photo, at) in [(Some(id), offset)].into_iter().chain(neighbours) {
             let Some(tex) = photo.and_then(|p| super::detail::photo_texture(app, p)) else { continue };
             let [w, h] = tex.size.map(|v| v.max(1) as f32);
             let scale = (room.height() / w).min(room.width() / h);
             // along the photo's width is down the screen for a clockwise turn, up for the other
             let centre = room.center() + vec2(0.0, at * f32::from(turn));
-            let upright = Rect::from_center_size(centre, vec2(w * scale, h * scale));
+            let mut upright = Rect::from_center_size(centre, vec2(w * scale, h * scale));
+            if photo == Some(id)
+                && shown < 1.0
+                && let Some(from) = from.filter(|r| r.is_positive())
+            {
+                // on its way: from the editor's place and size to the turned one's
+                let start = from.width() / w;
+                let s = egui::lerp(start..=scale, shown);
+                upright = Rect::from_center_size(from.center().lerp(centre, shown), vec2(w * s, h * s));
+            }
             if !upright.expand(w.max(h) * scale).intersects(screen) {
                 continue;
             }
             egui::Image::from_texture(egui::load::SizedTexture::new(tex.tex.id(), upright.size()))
                 .rotate(angle, egui::Vec2::splat(0.5))
                 .paint_at(ui, upright);
-            if photo == Some(id) {
-                register(ui, "photo:sideways", Rect::from_center_size(centre, vec2(h * scale, w * scale)));
+            if photo == Some(id) && want {
+                register(ui, "photo:sideways", Rect::from_center_size(upright.center(), vec2(upright.height(), upright.width())));
             }
         }
         super::detail::step_to(app, step);
     });
+}
+
+/// How long the photo takes to turn a quarter (s), about UIKit's rotation.
+const TURN_SECS: f32 = 0.4;
+
+/// How far the photo has turned towards the sideways view (0 upright where the editor has it, 1
+/// turned), eased as UIKit turns its interface, and which way: `None` once it is upright again.
+/// A change of mind halfway turns it back from where it is.
+fn turning(ctx: &egui::Context, want: bool, turn: i8) -> Option<(f32, i8)> {
+    #[derive(Clone, Copy)]
+    struct Turn {
+        /// Linear progress when this leg started, and towards 0 or 1.
+        from: f32,
+        to: f32,
+        start: f64,
+        turn: i8,
+    }
+    let id = egui::Id::unique("compact-turning");
+    let now = ctx.input(|i| i.time);
+    let at = |t: &Turn| {
+        let span = (t.to - t.from).abs() * TURN_SECS;
+        if span <= 0.0 { t.to } else { egui::lerp(t.from..=t.to, ((now - t.start) as f32 / span).clamp(0.0, 1.0)) }
+    };
+    let mut t = ctx.data(|d| d.get_temp::<Turn>(id)).unwrap_or(Turn { from: 0.0, to: 0.0, start: now, turn });
+    let to = if want { 1.0 } else { 0.0 };
+    // held the other way round: from upright again, towards the new side
+    if want && turn != t.turn {
+        t = Turn { from: 0.0, to, start: now, turn };
+    } else if t.to != to {
+        t = Turn { from: at(&t), to, start: now, turn: t.turn };
+    }
+    let p = at(&t);
+    ctx.data_mut(|d| d.insert_temp(id, t));
+    if p != t.to {
+        ctx.request_repaint();
+    }
+    if p <= 0.0 && !want {
+        return None;
+    }
+    // ease in and out (cubic), as UIKit's rotation
+    let eased = if p < 0.5 { 4.0 * p * p * p } else { 1.0 - (-2.0 * p + 2.0).powi(3) / 2.0 };
+    Some((eased, t.turn))
 }
 
 /// A finger's movement on the turned photo: along its width (+ towards the previous photo, the
