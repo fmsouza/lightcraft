@@ -468,6 +468,106 @@ fn trackpad_pinch_over_the_loupe_zooms() {
 fn swipe_by(h: &mut Headless, delta: egui::Vec2) {
     let start = loupe(h).center();
     touch_drag(h, start, start + delta, 10);
+    // the photo slides home
+    settle(h);
+}
+
+fn settle(h: &mut Headless) {
+    for _ in 0..30 {
+        h.step();
+    }
+}
+
+/// One finger down at `from` and moved to `to` in `steps`, still down.
+fn touch_hold(h: &mut Headless, from: egui::Pos2, to: egui::Pos2, steps: usize) {
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.input([touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), button(from, true)]);
+    h.step();
+    for i in 1..=steps {
+        let p = from + (to - from) * (i as f32 / steps as f32);
+        h.input([touch(egui::TouchPhase::Move, p), egui::Event::PointerMoved(p)]);
+        h.step();
+    }
+}
+
+fn touch_lift(h: &mut Headless, at: egui::Pos2) {
+    let touch = egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase: egui::TouchPhase::End, pos: at, force: None };
+    let button = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() };
+    h.input([touch, button, egui::Event::PointerGone]);
+    h.step();
+}
+
+/// Where the last frame painted textured images (photos, thumbnails).
+fn painted_images(h: &Headless) -> Vec<egui::Rect> {
+    let textured = |s: &egui::Shape| match s {
+        egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => Some(m.calc_bounds()),
+        _ => None,
+    };
+    h.view.painted_shapes().iter().filter_map(textured).collect()
+}
+
+#[test]
+fn a_swipe_brings_the_next_photo_in_beside_this_one_and_a_short_one_slides_back() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "none"}));
+    // the neighbours' renders made ahead
+    assert!(h.settle(T), "renders done");
+    let first = h.app.session.active();
+    let home = loupe(&h);
+    let c = home.center();
+    touch_hold(&mut h, c, c - egui::vec2(120.0, 0.0), 12);
+    let moved = loupe(&h);
+    assert!((moved.center().x - (c.x - 120.0)).abs() < 2.0, "the photo follows the finger: {moved:?}");
+    let canvas = h.app.canvas_rect.expect("canvas");
+    let beside = painted_images(&h).into_iter().filter(|r| r.left() > moved.right() && r.left() < canvas.right()).count();
+    assert!(beside >= 1, "the next photo shows to the right of it");
+    // held still, then lifted short of half way: it slides back, not jumps
+    for _ in 0..10 {
+        h.step();
+    }
+    touch_lift(&mut h, c - egui::vec2(120.0, 0.0));
+    h.step();
+    let x = loupe(&h).center().x;
+    assert!(x < c.x - 1.0 && x > c.x - 120.0, "on its way back: {x} (home {})", c.x);
+    settle(&mut h);
+    assert_eq!(h.app.session.active(), first);
+    assert_eq!(loupe(&h).center().x, c.x, "home");
+}
+
+#[test]
+fn a_swipe_past_half_way_steps_and_the_new_photo_slides_in_from_where_it_was() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "none"}));
+    let first = h.app.session.active();
+    let c = loupe(&h).center();
+    let canvas = h.app.canvas_rect.expect("canvas");
+    let far = canvas.width() * 0.6;
+    touch_hold(&mut h, c, c - egui::vec2(far, 0.0), 20);
+    for _ in 0..10 {
+        h.step();
+    }
+    touch_lift(&mut h, c - egui::vec2(far, 0.0));
+    h.step();
+    assert_ne!(h.app.session.active(), first, "the next photo");
+    let x = loupe(&h).center().x;
+    assert!(x > c.x + 1.0, "still sliding in from the right: {x} (home {})", c.x);
+    settle(&mut h);
+    assert_eq!(loupe(&h).center().x, c.x, "home");
+}
+
+#[test]
+fn past_the_last_photo_a_swipe_gives_and_comes_back() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "none"}));
+    let last = *h.app.session.visible().last().expect("photos");
+    h.app.run("library.select", json!({"ids": [last.0], "active": last.0})).expect("select");
+    settle(&mut h);
+    let c = loupe(&h).center();
+    touch_hold(&mut h, c, c - egui::vec2(300.0, 0.0), 10);
+    let x = loupe(&h).center().x;
+    assert!(x < c.x - 10.0 && x > c.x - 200.0, "it gives, less than the finger went: {x}");
+    touch_lift(&mut h, c - egui::vec2(300.0, 0.0));
+    settle(&mut h);
+    assert_eq!(h.app.session.active(), Some(last));
+    assert_eq!(loupe(&h).center().x, c.x);
 }
 
 #[test]
@@ -1617,17 +1717,49 @@ fn phone_held_sideways_shows_the_photo_alone_turned() {
     let photo_wide = w >= hgt;
     assert_eq!(shown.height() > shown.width(), photo_wide, "turned: {shown:?} for a {w}×{hgt} photo");
     assert!(shown.width() <= PHONE[0] + 0.5 && shown.height() <= PHONE[1] + 0.5, "it fits the screen: {shown:?}");
-    // a tool's sheet open: editing stays upright
-    h.app.ui.right = RightPanel::Edit;
-    h.step();
-    h.step();
-    assert!(widget(&h, "photo:sideways").is_none(), "editing stays upright");
     // turned back: the editor
-    h.app.ui.right = RightPanel::None;
     h.app.device_turn = 0;
     h.step();
     h.step();
     assert!(widget(&h, "photo:sideways").is_none());
+}
+
+#[test]
+fn phone_held_sideways_while_editing_shows_the_photo_and_turned_back_the_sheet_returns() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "edit"}));
+    assert!(widget(&h, "panel:sheet").is_some(), "editing");
+    h.app.device_turn = -1;
+    h.step();
+    h.step();
+    assert!(widget(&h, "photo:sideways").is_some(), "the sheet makes way for the photo");
+    h.app.device_turn = 0;
+    h.step();
+    h.step();
+    assert!(widget(&h, "photo:sideways").is_none());
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "the same tool");
+    assert!(widget(&h, "panel:sheet").is_some(), "its sheet is back");
+}
+
+#[test]
+fn phone_held_sideways_a_swipe_along_the_photo_steps_through_them() {
+    let mut h = demo(PHONE, json!({"view": "detail", "right": "none"}));
+    let first = h.app.session.active();
+    for turn in [1i8, -1] {
+        h.app.device_turn = turn;
+        h.step();
+        h.step();
+        let c = widget(&h, "photo:sideways").expect("sideways").center();
+        // to the next photo: the way the photo's right edge faces, towards its left
+        let towards_next = egui::vec2(0.0, -200.0 * f32::from(turn));
+        touch_drag(&mut h, c, c + towards_next, 10);
+        settle(&mut h);
+        let second = h.app.session.active();
+        assert_ne!(second, first, "turn {turn}: the next photo");
+        touch_drag(&mut h, c, c - towards_next, 10);
+        settle(&mut h);
+        assert_eq!(h.app.session.active(), first, "turn {turn}: back");
+        assert_eq!(widget(&h, "photo:sideways").expect("sideways").center(), c, "home");
+    }
 }
 
 #[test]

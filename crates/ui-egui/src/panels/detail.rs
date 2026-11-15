@@ -1,7 +1,7 @@
 //! The Detail (loupe) view: the developed photo, before/after, zoom & pan, the filmstrip, and the
 //! on-canvas tools (crop, brush/gradient masks, remove spots, white-balance picker).
 
-use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{DevelopSettings, MaskShape};
 use lightcraft_geom::{Affine, Point};
@@ -20,6 +20,7 @@ mod geometry;
 mod info;
 mod masks;
 mod retouch;
+pub(crate) mod swipe;
 mod window;
 
 pub(crate) use crop::crop_angle_label;
@@ -189,7 +190,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let resp = ui.interact(canvas, egui::Id::unique("loupe"), Sense::click_and_drag());
     announce_photo(app, &resp, &photo);
     // a touch swipe to the next / previous photo drags the photo along
-    let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan).translate(vec2(swipe_offset(ui.ctx()), 0.0));
+    let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan).translate(vec2(swipe::offset(ui.ctx()), 0.0));
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
     let navigating = areas.iter().any(|&view_area| {
@@ -197,7 +198,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img)
     });
     if navigating {
-        cancel_swipe(ui.ctx());
+        swipe::cancel(ui.ctx());
         target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
         img_rect = target_rect;
     }
@@ -327,6 +328,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         shown = "hover";
     } else {
         shown = draw(Slot::Main, img_rect, canvas);
+        swipe_neighbours(app, &p, id, img_rect.center().x - target_rect.center().x + swipe::offset(ui.ctx()), main_area, canvas);
         if shown == "none" {
             none_message(app, &p, &t, canvas, id);
         }
@@ -825,6 +827,9 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
     let (tex, what) = if let Some(t) = mine(slot) {
         (t, "render")
+    } else if let Some(t) = prefetched(app, id) {
+        // a swipe stepped onto it: its render made ahead, until the loupe's own comes
+        (t, "prefetched")
     } else if let Some(t) = mine(Slot::Preview) {
         (t, t.quick.map(quick_name).unwrap_or("preview"))
     } else if let Some(t) = app.renderer.thumb(id) {
@@ -1170,31 +1175,60 @@ fn phone_taps(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, zoom: b
     }
 }
 
-/// One finger dragged sideways across the photo at Fit: the photo follows it, and letting go past
-/// a sixth of the canvas (at least 60 pt) shows the next or previous photo. Touch only (a mouse
-/// drag at Fit stays a no-op). True while a swipe is in progress.
+/// One finger dragged sideways across the photo at Fit: the photo follows it with its neighbour
+/// beside it, and a lift past half the way or a flick shows the neighbour ([`swipe`]). Touch only
+/// (a mouse drag at Fit stays a no-op). True while a swipe is in progress.
 fn swipe(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, canvas: Rect) -> bool {
-    let id = egui::Id::unique("loupe-swipe");
-    let moved_id = id.with("moved");
-    if resp.drag_stopped() {
-        // the pointer may be gone already: decide from the movement stored while dragging
-        let Some(moved) = ui.ctx().data_mut(|d| d.remove_temp::<Vec2>(moved_id)) else { return false };
-        ui.ctx().data_mut(|d| d.remove::<f32>(id));
-        if moved.x.abs() > (canvas.width() / 6.0).max(60.0) && moved.x.abs() > moved.y.abs() * 1.5 {
-            let _ = app.run(if moved.x < 0.0 { "library.next" } else { "library.previous" }, json!({}));
+    let [previous, next] = neighbours(app).map(|n| n.is_some());
+    let track = swipe::Track { axis: swipe::upright, turn: 0, pitch: canvas.width() + swipe::GAP, has_previous: previous, has_next: next };
+    let (step, swiping) = swipe::track(ui, resp, &track);
+    step_to(app, step);
+    swiping || step.is_some()
+}
+
+/// Show the photo a swipe stepped onto.
+pub(crate) fn step_to(app: &mut LightcraftApp, step: Option<swipe::Step>) {
+    match step {
+        Some(swipe::Step::Next) => drop(app.run("library.next", json!({}))),
+        Some(swipe::Step::Previous) => drop(app.run("library.previous", json!({}))),
+        None => {}
+    }
+}
+
+/// The photos before and after the active one in the filmstrip's order.
+pub(crate) fn neighbours(app: &mut LightcraftApp) -> [Option<PhotoId>; 2] {
+    let Some(id) = app.session.active() else { return [None, None] };
+    let ids = app.session.visible();
+    let Some(i) = ids.iter().position(|p| *p == id) else { return [None, None] };
+    [i.checked_sub(1).and_then(|j| ids.get(j)).copied(), ids.get(i + 1).copied()]
+}
+
+/// The best picture of `id` there is to show where its own loupe render isn't: the loupe's (it was
+/// the active photo), its render made ahead ([`prefetch_neighbours`]), its stand-in, its thumbnail.
+pub(crate) fn photo_texture(app: &LightcraftApp, id: PhotoId) -> Option<&crate::render::Tex> {
+    let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
+    mine(Slot::Main).or_else(|| prefetched(app, id)).or_else(|| mine(Slot::Preview)).or_else(|| app.renderer.thumb(id))
+}
+
+/// A render of `id` made ahead for stepping to it.
+fn prefetched(app: &LightcraftApp, id: PhotoId) -> Option<&crate::render::Tex> {
+    [0, 1].into_iter().find_map(|n| app.renderer.textures.get(&Slot::Prefetch(n)).filter(|t| t.photo == id))
+}
+
+/// While a swipe moves the photo `offset` along, its neighbours beside it, a gap between.
+fn swipe_neighbours(app: &mut LightcraftApp, p: &egui::Painter, id: PhotoId, offset: f32, main_area: Rect, canvas: Rect) {
+    if offset.abs() < 0.5 || app.session.active() != Some(id) {
+        return;
+    }
+    let pitch = canvas.width() + swipe::GAP;
+    let [previous, next] = neighbours(app);
+    for (n, at) in [(previous, offset - pitch), (next, offset + pitch)] {
+        let Some(tex) = n.and_then(|n| photo_texture(app, n)) else { continue };
+        let r = fit_texture_rect(main_area, tex.size).translate(vec2(at, 0.0));
+        if r.intersects(canvas) {
+            p.image(tex.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
-        return true;
     }
-    let swiping = ui.ctx().data(|d| d.get_temp::<Vec2>(moved_id)).is_some();
-    if !(resp.drag_started() && ui.input(|i| i.any_touches()) || resp.dragged() && swiping) {
-        return false;
-    }
-    let Some(moved) = ui.input(|i| i.pointer.interact_pos().zip(i.pointer.press_origin()).map(|(p, o)| p - o)) else { return swiping };
-    ui.ctx().data_mut(|d| {
-        d.insert_temp(moved_id, moved);
-        d.insert_temp(id, if moved.x.abs() > moved.y.abs() { moved.x } else { 0.0 });
-    });
-    true
 }
 
 /// The filmstrip's height under a view `full` tall: the compact layout's is lower in a short
@@ -1202,20 +1236,6 @@ fn swipe(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, canv
 pub(crate) fn film_height(ctx: &egui::Context, full: Rect) -> f32 {
     let t = Tokens::get(ctx);
     if super::compact::is_compact(ctx) { (full.height() * 0.24).clamp(FILM_MIN_H, t.film_h) } else { t.film_h }
-}
-
-/// How far a touch swipe has dragged the photo sideways (0 when none is in progress).
-fn swipe_offset(ctx: &egui::Context) -> f32 {
-    ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("loupe-swipe"))).unwrap_or(0.0)
-}
-
-/// Drop a swipe in progress (a pinch or two-finger pan took over).
-fn cancel_swipe(ctx: &egui::Context) {
-    let id = egui::Id::unique("loupe-swipe");
-    ctx.data_mut(|d| {
-        d.remove::<f32>(id);
-        d.remove::<Vec2>(id.with("moved"));
-    });
 }
 
 /// The first points of a brush or spot stroke whose first position is `n`: the press point too

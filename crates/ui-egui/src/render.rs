@@ -42,8 +42,9 @@ pub enum Slot {
     /// Compare or Reference zoomed past what `Compare(i)` holds: the window of pane `i`'s frame
     /// that is on screen, drawn over it (see [`crate::region`] and `panels::compare`).
     CompareRegion(u8),
-    /// Background preparation of a neighbouring photo (no texture: its decoded source and view
-    /// render are cached by the engine). 0 = next, 1 = previous.
+    /// Background preparation of a neighbouring photo (its decoded source and view render are
+    /// cached by the engine, and the render kept as a texture for a swipe to show). 0 = next,
+    /// 1 = previous.
     Prefetch(u8),
     /// A variant thumbnail (profile / preset browsers), by its job key ([`Session::variant_job`]).
     /// Kept in a bounded LRU ([`VARIANT_TEXTURES`]).
@@ -1081,9 +1082,8 @@ impl Renderer {
                     continue;
                 }
             };
-            if matches!(slot, Slot::Prefetch(_)) {
-                continue;
-            }
+            // (a prefetch is kept as a texture too: a swipe shows the neighbour coming, and the
+            // photo it steps onto, until the loupe's own render is up)
             if slot == Slot::HdrHistogram {
                 if rendered.histogram.hdr.is_some() {
                     self.live_hdr_histogram = Some((r.photo, r.key, rendered.histogram));

@@ -122,7 +122,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // they go at once and come back fading in, as the photo glides between its rooms
     let shown = ui.ctx().animate_bool_with_time(egui::Id::unique("compact-chrome-shown"), !hidden, 0.2);
     if hidden && !cover {
-        sideways_photo(app, ui.ctx());
+        sideways_photo(app, ui);
         return;
     }
     // (only the chrome: the caller draws the photo into this same `ui` afterwards)
@@ -171,13 +171,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// Whether the phone editor shows its photo alone, turned to fill the screen: the phone is held
-/// sideways (its interface stays upright: [`LightcraftApp::device_turn`]), on a photo with no
-/// tool's sheet, sheet or dialog open, as phone photo editors do. Turned back, the editor returns.
+/// sideways (its interface stays upright: [`LightcraftApp::device_turn`]) on a photo, as phone
+/// photo editors do: its bars and a tool's sheet make way (turned back, they are as they were);
+/// a dialog or a sheet of choices (Share, Rate, More) stays upright to be answered.
 pub fn sideways(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     app.device_turn != 0
         && app.ui.view == ViewMode::Detail
         && app.session.active().is_some()
-        && !sheet_open(app)
         && app.ui.dialog.is_none()
         && !super::share_sheet::is_open(ctx)
         && !super::rate_sheet::is_open(ctx)
@@ -185,33 +185,53 @@ pub fn sideways(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 }
 
 /// The photo alone on black, turned a quarter towards the way the phone is held so it fills the
-/// screen ([`sideways`]). The editor goes on underneath (its renders keep coming); this covers it
-/// and takes the taps.
-fn sideways_photo(app: &LightcraftApp, ctx: &egui::Context) {
+/// screen ([`sideways`]); a swipe along it goes to the next or previous photo, as upright
+/// ([`super::detail::swipe`]). The editor goes on underneath (its renders keep coming); this
+/// covers it and takes the touches.
+fn sideways_photo(app: &mut LightcraftApp, ctx: &egui::Context) {
     if !sideways(app, ctx) {
         return;
     }
     let Some(id) = app.session.active() else { return };
-    let mine = |s: crate::render::Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
-    let tex = mine(crate::render::Slot::Main).or_else(|| mine(crate::render::Slot::Preview)).or_else(|| app.renderer.thumb(id));
     let screen = ctx.viewport_rect();
     let room = ctx.content_rect();
+    let turn = app.device_turn.signum();
+    // turned a quarter, the photo's width runs down the screen
+    let pitch = room.height() + super::detail::swipe::GAP;
+    let [previous, next] = super::detail::neighbours(app);
     egui::Area::new(egui::Id::unique("compact-sideways")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
-        let (_, _) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
+        let (_, resp) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
+        let track = super::detail::swipe::Track { axis: along_turned, turn, pitch, has_previous: previous.is_some(), has_next: next.is_some() };
+        let (step, _) = super::detail::swipe::track(ui, &resp, &track);
+        let offset = super::detail::swipe::offset(ctx);
         ui.painter().rect_filled(screen, 0.0, egui::Color32::BLACK);
-        let Some(tex) = tex else { return };
-        let [w, h] = tex.size.map(|v| v.max(1) as f32);
-        // turned a quarter, the photo's width runs down the screen: fit it in the room so
-        let scale = (room.height() / w).min(room.width() / h);
-        let upright = Rect::from_center_size(room.center(), vec2(w * scale, h * scale));
         // top to the left: the photo's top faces the screen's right (a clockwise quarter)
-        let angle = f32::from(app.device_turn.signum()) * std::f32::consts::FRAC_PI_2;
-        egui::Image::from_texture(egui::load::SizedTexture::new(tex.tex.id(), upright.size()))
-            .rotate(angle, egui::Vec2::splat(0.5))
-            .paint_at(ui, upright);
-        let shown = Rect::from_center_size(room.center(), vec2(h * scale, w * scale));
-        register(ui, "photo:sideways", shown);
+        let angle = f32::from(turn) * std::f32::consts::FRAC_PI_2;
+        for (photo, at) in [(Some(id), offset), (previous, offset - pitch), (next, offset + pitch)] {
+            let Some(tex) = photo.and_then(|p| super::detail::photo_texture(app, p)) else { continue };
+            let [w, h] = tex.size.map(|v| v.max(1) as f32);
+            let scale = (room.height() / w).min(room.width() / h);
+            // along the photo's width is down the screen for a clockwise turn, up for the other
+            let centre = room.center() + vec2(0.0, at * f32::from(turn));
+            let upright = Rect::from_center_size(centre, vec2(w * scale, h * scale));
+            if !upright.expand(w.max(h) * scale).intersects(screen) {
+                continue;
+            }
+            egui::Image::from_texture(egui::load::SizedTexture::new(tex.tex.id(), upright.size()))
+                .rotate(angle, egui::Vec2::splat(0.5))
+                .paint_at(ui, upright);
+            if photo == Some(id) {
+                register(ui, "photo:sideways", Rect::from_center_size(centre, vec2(h * scale, w * scale)));
+            }
+        }
+        super::detail::step_to(app, step);
     });
+}
+
+/// A finger's movement on the turned photo: along its width (+ towards the previous photo, the
+/// way its left edge faces) and across it.
+fn along_turned(d: egui::Vec2, turn: i8) -> (f32, f32) {
+    (d.y * f32::from(turn), d.x)
 }
 
 /// A bar along the top with the safe-area and margins of the compact layout.
