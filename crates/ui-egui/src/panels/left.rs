@@ -154,6 +154,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         section(app, ui, s, rows, |app, ui| albums_rows(app, ui, reveal))
                     }
                     SidebarSection::Local => {
+                        // (a phone or tablet has no home folder, Desktop or Downloads to browse:
+                        // its photos come in through the system's pickers)
+                        if app.services.mobile {
+                            continue;
+                        }
                         let Some(local) = &local else { continue };
                         section(app, ui, s, local.places.places.len(), |app, ui| local_rows(app, ui, local))
                     }

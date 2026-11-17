@@ -140,6 +140,38 @@ pub fn share(app: &AndroidApp, paths: &[String]) {
     }
 }
 
+/// Save exported files to the gallery (Pictures/LightCraft); the outcome comes from [`take_saved`].
+pub fn save_to_gallery(app: &AndroidApp, paths: &[String]) {
+    let r = with_activity(app, |env, activity| {
+        let joined = env.new_string(paths.join("\n"))?;
+        env.call_method(activity, jni_str!("saveToGallery"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&joined)])?;
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::warn!("save to gallery: {e}");
+    }
+}
+
+/// Saves to the gallery finished since the last call: how many photos, or why it failed.
+pub fn take_saved(app: &AndroidApp) -> Vec<Result<usize, String>> {
+    let r = with_activity(app, |env, activity| {
+        let s = env.call_method(activity, jni_str!("takeSaved"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
+        if s.is_null() {
+            return Ok(String::new());
+        }
+        // SAFETY: takeSaved returns a String
+        unsafe { JString::from_raw(env, s.into_raw()) }.try_to_string(env)
+    });
+    let text = r.unwrap_or_else(|e| {
+        log::warn!("save to gallery: {e}");
+        String::new()
+    });
+    text.lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.strip_prefix('!').map_or_else(|| Ok(l.parse().unwrap_or(0)), |why| Err(why.to_string())))
+        .collect()
+}
+
 /// How far the copy of picked files is, while one runs: files copied, files to copy (0: not known
 /// yet), and the file being copied.
 pub fn copy_progress(app: &AndroidApp) -> Option<(u64, u64, String)> {
@@ -189,6 +221,57 @@ pub fn logcat(level: log::Level, text: &str) {
     // SAFETY: liblog call with NUL-terminated strings that outlive it
     unsafe {
         ndk_sys::__android_log_write(prio.0 as std::ffi::c_int, c"LightCraft".as_ptr(), text.as_ptr());
+    }
+}
+
+/// Open "…"'s menu as the system's popup, its right edge under (`x`, `y`) in pixels; `json`:
+/// its items (`native_menu::to_json`).
+pub fn show_menu(app: &AndroidApp, x: f32, y: f32, json: &str) {
+    let r = with_activity(app, |env, activity| {
+        let json = env.new_string(json)?;
+        env.call_method(
+            activity,
+            jni_str!("showMenu"),
+            jni_sig!("(FFLjava/lang/String;)V"),
+            &[JValue::Float(x), JValue::Float(y), JValue::Object(&json)],
+        )?;
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::warn!("menu: {e}");
+    }
+}
+
+/// What the menu picked ("id\tparams" each); `Some(empty)` once it closed without a pick, `None`
+/// while it's open.
+pub fn take_menu_picks(app: &AndroidApp) -> Option<Vec<String>> {
+    take_strings(app, jni_str!("takeMenuPicks"))
+}
+
+/// The system's haptic feedback for `kind` (the view's own, so it follows the phone's settings).
+pub fn haptic(app: &AndroidApp, kind: lightcraft_ui_egui::Haptic) {
+    let code = match kind {
+        lightcraft_ui_egui::Haptic::Press => 0,
+        lightcraft_ui_egui::Haptic::Tick => 1,
+    };
+    if let Err(e) =
+        with_activity(app, |env, activity| env.call_method(activity, jni_str!("haptic"), jni_sig!("(I)V"), &[JValue::Int(code)]).map(|_| ()))
+    {
+        log::warn!("haptic: {e}");
+    }
+}
+
+/// The screen's density now (dpi), from the activity's configuration (android-activity's copy
+/// isn't refreshed when the resolution changes while the app runs).
+pub fn density_dpi(app: &AndroidApp) -> Option<u32> {
+    let dpi = with_activity(app, |env, activity| env.call_method(activity, jni_str!("densityDpi"), jni_sig!("()I"), &[])?.i());
+    dpi.ok().and_then(|d| u32::try_from(d).ok()).filter(|d| *d > 0)
+}
+
+/// Back with nowhere left to go: the app goes to the background, as the system's Back does.
+pub fn leave(app: &AndroidApp) {
+    if let Err(e) = with_activity(app, |env, activity| env.call_method(activity, jni_str!("leave"), jni_sig!("()V"), &[]).map(|_| ())) {
+        log::warn!("leave: {e}");
     }
 }
 

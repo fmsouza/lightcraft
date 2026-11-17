@@ -2334,5 +2334,8 @@
   "Set up name suggestions…": "Skonfiguruj propozycje imion…",
   "Top bar": "Górny pasek",
   "Tool strip": "Pasek narzędzi",
-  "Bottom bar": "Dolny pasek"
+  "Bottom bar": "Dolny pasek",
+  "Touch": "Dotyk",
+  "Show touches": "Pokazuj dotknięcia",
+  "A dot where a finger is and a ring where it lifted, for screen recordings.": "Kropka w miejscu palca i pierścień tam, gdzie został podniesiony, do nagrań ekranu."
 }

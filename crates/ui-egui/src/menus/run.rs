@@ -3,12 +3,18 @@ use super::ui_commands::{UI_COMMANDS, language_from_command};
 use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel, Value, ViewMode, Zoom, json, thumb_size_view};
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
+    // (a phone's tool row lights the tool it opened: no toast to say so over the photo)
+    let say = !crate::panels::compact::is_compact(ctx);
     if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
         app.ui.right = RightPanel::None;
-        app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
+        if say {
+            app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
+        }
     } else {
         app.ui.right = p;
-        app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
+        if say {
+            app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
+        }
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
         }
@@ -1519,6 +1525,10 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
             }
             _ => app.ui.view = ViewMode::PhotoGrid,
         }
+    } else if !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+        // People, the map and the other views: back to the photos (‹ in a phone's bar did
+        // nothing there)
+        app.ui.view = ViewMode::PhotoGrid;
     }
     Ok(Value::Null)
 }

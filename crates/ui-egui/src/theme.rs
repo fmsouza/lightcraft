@@ -282,16 +282,39 @@ impl Tokens {
     }
 }
 
-/// Fonts the host adds as the last fallback of every family (see [`add_fallback_font`]).
-static HOST_FALLBACKS: std::sync::Mutex<Vec<(String, Arc<FontData>)>> = std::sync::Mutex::new(Vec::new());
+/// Fonts the host adds as the last fallback of every family (see [`add_fallback_font`]), each
+/// with the script it is for (empty: any).
+static HOST_FALLBACKS: std::sync::Mutex<Vec<(String, Arc<FontData>, &'static str)>> = std::sync::Mutex::new(Vec::new());
+
+/// The host's own interface font, in place of Inter (see [`set_primary_font`]): its regular face
+/// and its strong one.
+static HOST_PRIMARY: std::sync::Mutex<Option<(Arc<FontData>, Arc<FontData>)>> = std::sync::Mutex::new(None);
+
+/// Draw the interface in the host's own font (a phone's system font, SF Pro on iOS) instead of
+/// Inter, from the next [`install_fonts`] on: face `index` of `bytes`. Strong text uses its
+/// heavier weight where it is a variable font, else the same face.
+pub fn set_primary_font(bytes: &'static [u8], index: u32) {
+    let regular = FontData { index, ..FontData::from_static(bytes) };
+    let strong = strong_weight_of(FontData { index, ..FontData::from_static(bytes) }).unwrap_or_else(|| regular.clone());
+    *HOST_PRIMARY.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::new(regular), Arc::new(strong)));
+}
+
+/// [`add_fallback_font`] for one script (ISO 15924, as [`crate::i18n::Locale::script`]): face
+/// `index` of `bytes`. While the interface is in a language of that script it comes before the
+/// other fallbacks, so shared characters (Han in Chinese and Japanese) take that language's forms.
+pub fn add_script_fallback_font(name: &str, bytes: &'static [u8], index: u32, script: &'static str) {
+    let mut v = HOST_FALLBACKS.lock().unwrap_or_else(|e| e.into_inner());
+    v.retain(|(n, ..)| n != name);
+    v.push((name.to_string(), Arc::new(FontData { index, ..FontData::from_static(bytes) }), script));
+}
 
 /// Add `font` as the last fallback of every family, from the next [`install_fonts`] on: e.g. a
 /// phone's system CJK font, so text typed in a script the bundled fonts don't cover (Korean,
 /// or any CJK without craft-fonts) shows instead of boxes.
 pub fn add_fallback_font(name: &str, font: FontData) {
     let mut v = HOST_FALLBACKS.lock().unwrap_or_else(|e| e.into_inner());
-    v.retain(|(n, _)| n != name);
-    v.push((name.to_string(), Arc::new(font)));
+    v.retain(|(n, ..)| n != name);
+    v.push((name.to_string(), Arc::new(font), ""));
 }
 
 pub fn install_fonts(ctx: &egui::Context) {
@@ -350,11 +373,19 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
         }
     }
     let defaults: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    // (a host with a font of its own draws the interface in it; Inter stays as the next face)
+    let host = HOST_PRIMARY.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let mut prop = vec!["Inter".to_string()];
+    let mut semi = vec!["Inter-SemiBold".to_string()];
+    if let Some((regular_face, strong_face)) = host {
+        fonts.font_data.insert(HOST_FONT.into(), regular_face);
+        fonts.font_data.insert(HOST_FONT_STRONG.into(), strong_face);
+        prop.insert(0, HOST_FONT.into());
+        semi.insert(0, HOST_FONT_STRONG.into());
+    }
     prop.extend(defaults.iter().cloned());
     prop.extend(regular);
     fonts.families.insert(FontFamily::Proportional, prop);
-    let mut semi = vec!["Inter-SemiBold".to_string()];
     semi.extend(defaults);
     semi.extend(bold);
     fonts.families.insert(FontFamily::Name(FONT_SEMIBOLD.into()), semi);
@@ -371,9 +402,23 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
     fonts
 }
 
-/// Add the host's fallback fonts (see [`add_fallback_font`]) as the last face of every family.
-fn add_host_fallbacks(fonts: &mut FontDefinitions, host: &[(String, Arc<FontData>)]) {
-    for (name, font) in host {
+/// The names of the host's interface font in the definitions ([`set_primary_font`]).
+const HOST_FONT: &str = "host";
+const HOST_FONT_STRONG: &str = "host strong";
+
+/// Add the host's fallback fonts (see [`add_fallback_font`]) as the last faces of every family:
+/// the interface language's script first.
+fn add_host_fallbacks(fonts: &mut FontDefinitions, host: &[(String, Arc<FontData>, &'static str)]) {
+    let script = crate::i18n::language().script();
+    // (Traditional Chinese falls back on Simplified's face, and the reverse, before Japanese)
+    let rank = |s: &str| match s {
+        s if s == script => 0,
+        "Hans" | "Hant" if matches!(script, "Hans" | "Hant") => 1,
+        _ => 2,
+    };
+    let mut host: Vec<_> = host.iter().collect();
+    host.sort_by_key(|(_, _, s)| rank(s));
+    for (name, font, _) in host {
         fonts.font_data.insert(name.clone(), font.clone());
         for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
             fonts.families.entry(family).or_default().push(name.clone());
@@ -401,7 +446,11 @@ const STRONG_WEIGHT: f32 = 600.0;
 /// `bytes` as a face drawn at [`STRONG_WEIGHT`], when it is a variable font whose weight axis goes
 /// heavier than the weight it draws at by default. The bytes are borrowed, not copied.
 fn strong_weight(bytes: &'static [u8]) -> Option<FontData> {
-    let face = FontData::from_static(bytes);
+    strong_weight_of(FontData::from_static(bytes))
+}
+
+/// [`strong_weight`] of a face already made (one face of a collection).
+fn strong_weight_of(face: FontData) -> Option<FontData> {
     let axis = face.variation_axes().into_iter().find(|axis| axis.tag.to_be_bytes() == *b"wght")?;
     let weight = STRONG_WEIGHT.min(axis.range.max);
     if weight.partial_cmp(&axis.default) != Some(std::cmp::Ordering::Greater) {
@@ -809,12 +858,31 @@ mod fallback_tests {
     fn host_fallback_fonts_come_last_in_every_family() {
         // (Inter's bytes under another name; not added to the process-wide list, which other tests
         // count fonts from)
-        let host = [("test fallback".to_string(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))))];
+        let host = [("test fallback".to_string(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))), "")];
         let mut defs = font_definitions(&[]);
         add_host_fallbacks(&mut defs, &host);
         assert!(defs.font_data.contains_key("test fallback"));
         for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
             assert_eq!(defs.families[&family].last().map(String::as_str), Some("test fallback"), "{family:?}");
         }
+    }
+
+    /// A phone's system fonts for Japanese and Chinese: the interface language's comes first, so
+    /// the Han characters both cover take its forms.
+    #[test]
+    fn host_fallback_of_the_interface_script_comes_first() {
+        let face = || Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")));
+        let host =
+            [("system Jpan".to_string(), face(), "Jpan"), ("system Hans".to_string(), face(), "Hans"), ("system Hant".to_string(), face(), "Hant")];
+        let order = |locale| {
+            crate::i18n::set_language(locale);
+            let mut defs = FontDefinitions::default();
+            add_host_fallbacks(&mut defs, &host);
+            defs.families[&FontFamily::Proportional].iter().filter(|n| n.starts_with("system")).cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(order(crate::i18n::Locale::En), ["system Jpan", "system Hans", "system Hant"], "as added");
+        assert_eq!(order(crate::i18n::Locale::ZhHant), ["system Hant", "system Hans", "system Jpan"]);
+        assert_eq!(order(crate::i18n::Locale::Ja), ["system Jpan", "system Hans", "system Hant"]);
+        crate::i18n::set_language(crate::i18n::Locale::En);
     }
 }

@@ -40,6 +40,61 @@ fn live_hdr_histogram(live: Option<&(PhotoId, u64, Histogram)>, id: PhotoId, dra
     live.filter(|l| dragging && l.0 == id).map(|l| l.2.clone())
 }
 
+/// The histogram's curves in `plot`: the luminance filled, and the red, green and blue lines (one
+/// neutral line for a greyscale photo).
+fn paint_curves(p: &egui::Painter, plot: Rect, h: &Histogram) {
+    let smooth = |v: &[u32]| -> Vec<f32> {
+        (0..256)
+            .map(|i| {
+                let (a, b) = (i.max(2) - 2, (i + 3).min(256));
+                v[a..b].iter().map(|x| *x as f32).sum::<f32>() / (b - a) as f32
+            })
+            .collect()
+    };
+    let chans = [(smooth(&h.r), hex("#df3939")), (smooth(&h.g), hex("#44b072")), (smooth(&h.b), hex("#3b6fe0"))];
+    let peak = chans.iter().flat_map(|(v, _)| v.iter().skip(2).take(252)).fold(1.0f32, |a, b| a.max(*b));
+    let to = |i: usize, v: f32| pos2(plot.left() + plot.width() * i as f32 / 255.0, plot.bottom() - plot.height() * (v / peak).sqrt().min(1.0));
+    // luminance fill
+    let lum = smooth(&h.luma);
+    let mut mesh = Mesh::default();
+    for i in 0..256 {
+        let top = to(i, lum[i]);
+        mesh.vertices.push(Vertex { pos: top, uv: Pos2::ZERO, color: Color32::from_gray(120).gamma_multiply(0.35) });
+        mesh.vertices.push(Vertex { pos: pos2(top.x, plot.bottom()), uv: Pos2::ZERO, color: Color32::from_gray(120).gamma_multiply(0.35) });
+        if i > 0 {
+            let k = (i as u32) * 2;
+            mesh.indices.extend([k - 2, k - 1, k, k - 1, k + 1, k]);
+        }
+    }
+    p.add(mesh);
+    // greyscale images: the three channels coincide — draw one neutral line
+    let spread: f32 = (0..256).map(|i| (chans[0].0[i] - chans[1].0[i]).abs() + (chans[1].0[i] - chans[2].0[i]).abs()).sum();
+    let total: f32 = chans[1].0.iter().sum::<f32>().max(1.0);
+    if spread / total < 0.02 {
+        let pts: Vec<Pos2> = (0..256).map(|i| to(i, chans[1].0[i])).collect();
+        p.add(egui::Shape::line(pts, Stroke::new(1.5, Color32::from_gray(200))));
+    } else {
+        for (v, c) in &chans {
+            let pts: Vec<Pos2> = (0..256).map(|i| to(i, v[i])).collect();
+            p.add(egui::Shape::line(pts, Stroke::new(1.5, *c)));
+        }
+    }
+}
+
+/// The phone editor's histogram (View > Histogram; nothing elsewhere): small, over the photo's top left corner, as
+/// phone photo editors show it, rather than above the Edit sheet's few rows of sliders.
+pub(crate) fn photo_overlay(app: &LightcraftApp, ui: &egui::Ui, canvas: Rect, id: PhotoId) {
+    if !app.ui.histogram || !crate::panels::compact::is_compact(ui.ctx()) {
+        return;
+    }
+    let Some(h) = preview_histogram(app, id) else { return };
+    let r = Rect::from_min_size(canvas.min + vec2(10.0, 10.0), vec2(132.0, 72.0));
+    register(ui, "histogramOverlay", r);
+    let p = ui.painter().with_clip_rect(canvas);
+    p.rect_filled(r, 8.0, Color32::from_black_alpha(150));
+    paint_curves(&p, r.shrink2(vec2(6.0, 8.0)), &h);
+}
+
 /// The histogram, its clipping buttons and the EXIF strip, drawn above the Edit panel's scrolling sliders
 /// ([`crate::panels::right::show`]).
 pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -107,14 +162,6 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     }
     let clipping = hist.as_ref().map(|h| h.clipping());
     if let Some(h) = hist {
-        let smooth = |v: &[u32]| -> Vec<f32> {
-            (0..256)
-                .map(|i| {
-                    let (a, b) = (i.max(2) - 2, (i + 3).min(256));
-                    v[a..b].iter().map(|x| *x as f32).sum::<f32>() / (b - a) as f32
-                })
-                .collect()
-        };
         // HDR: SDR on the left half, a solid line at SDR white and dashed ones between the stops
         if let Some(b) = h.hdr {
             let x0 = plot.left() + plot.width() * b.from as f32 / 255.0;
@@ -136,34 +183,7 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
                 p.line_segment([pos2(x, plot.top()), pos2(x, plot.bottom())], Stroke::new(1.0, Color32::from_rgb(230, 150, 60)));
             }
         }
-        let chans = [(smooth(&h.r), hex("#df3939")), (smooth(&h.g), hex("#44b072")), (smooth(&h.b), hex("#3b6fe0"))];
-        let peak = chans.iter().flat_map(|(v, _)| v.iter().skip(2).take(252)).fold(1.0f32, |a, b| a.max(*b));
-        let to = |i: usize, v: f32| pos2(plot.left() + plot.width() * i as f32 / 255.0, plot.bottom() - plot.height() * (v / peak).sqrt().min(1.0));
-        // luminance fill
-        let lum = smooth(&h.luma);
-        let mut mesh = Mesh::default();
-        for i in 0..256 {
-            let top = to(i, lum[i]);
-            mesh.vertices.push(Vertex { pos: top, uv: Pos2::ZERO, color: Color32::from_gray(120).gamma_multiply(0.35) });
-            mesh.vertices.push(Vertex { pos: pos2(top.x, plot.bottom()), uv: Pos2::ZERO, color: Color32::from_gray(120).gamma_multiply(0.35) });
-            if i > 0 {
-                let k = (i as u32) * 2;
-                mesh.indices.extend([k - 2, k - 1, k, k - 1, k + 1, k]);
-            }
-        }
-        p.add(mesh);
-        // greyscale images: the three channels coincide — draw one neutral line
-        let spread: f32 = (0..256).map(|i| (chans[0].0[i] - chans[1].0[i]).abs() + (chans[1].0[i] - chans[2].0[i]).abs()).sum();
-        let total: f32 = chans[1].0.iter().sum::<f32>().max(1.0);
-        if spread / total < 0.02 {
-            let pts: Vec<Pos2> = (0..256).map(|i| to(i, chans[1].0[i])).collect();
-            p.add(egui::Shape::line(pts, Stroke::new(1.5, Color32::from_gray(200))));
-        } else {
-            for (v, c) in &chans {
-                let pts: Vec<Pos2> = (0..256).map(|i| to(i, v[i])).collect();
-                p.add(egui::Shape::line(pts, Stroke::new(1.5, *c)));
-            }
-        }
+        paint_curves(p, plot, &h);
     }
     let mut clicked = resp.clicked();
     // both buttons keep clear of the panel's right edge, where its floating scroll bar widens when

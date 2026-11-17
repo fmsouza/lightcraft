@@ -14,7 +14,7 @@ pub fn combo_box(id: impl egui::AsIdSalt) -> craft_ui::ComboBox<'static> {
         .icon(|ui, rect, visuals, _| {
             paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, visuals.fg_stroke.color);
         })
-        .popup_style(list_style.into())
+        .popup_style(if FINGER_SCOPE.with(std::cell::Cell::get) { finger_list_style.into() } else { list_style.into() })
 }
 
 /// Name a dropdown for screen readers. egui 0.37's `ComboBox::from_id_salt` publishes only the
@@ -29,6 +29,31 @@ pub fn name_combo(response: &egui::Response, label: &str) {
 /// grew 2 points when hovered, and the longest name of a list sized to it wrapped (#2354).
 fn list_style(style: &mut egui::Style) {
     style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+}
+
+/// [`list_style`] with finger-sized rows: a dropdown made among finger-sized controls.
+fn finger_list_style(style: &mut egui::Style) {
+    list_style(style);
+    style.spacing.button_padding = vec2(14.0, 12.0);
+    style.spacing.interact_size.y = 44.0;
+    style.spacing.item_spacing.y = 2.0;
+    for s in [egui::TextStyle::Body, egui::TextStyle::Button] {
+        if let Some(f) = style.text_styles.get_mut(&s) {
+            f.size = f.size.max(16.0);
+        }
+    }
+}
+
+thread_local! {
+    /// Whether the controls being drawn are finger-sized (a phone's dialog): set by the dialog for
+    /// as long as it draws, read by [`combo_box`], whose list (a pop-up of its own) does not
+    /// inherit the dialog's style. Per thread: the UI's, or one test's.
+    static FINGER_SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark the controls drawn from now on as finger-sized or not; returns what it was (to put back).
+pub(crate) fn set_finger_scope(on: bool) -> bool {
+    FINGER_SCOPE.with(|f| f.replace(on))
 }
 
 /// A native button with a vector arrow beside its text; egui reserves the icon's space.
@@ -56,6 +81,11 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
         return ui.menu_button(atoms, contents);
     }
     let button = egui::Button::new(atoms.into_atoms()).right_text("    ");
+    // the phone layout's context sheet opens a submenu inline, under its row: there is no room
+    // beside a sheet as wide as the screen
+    if crate::menu_level::context_depth(ui.ctx()).is_some() && crate::panels::compact::is_compact(ui.ctx()) {
+        return inline_submenu(ui, button, contents);
+    }
     // in a context menu, the submenu is bounded by the window like the menu itself
     let (response, inner) = match crate::menu_level::context_depth(ui.ctx()) {
         Some(depth) => {
@@ -73,6 +103,31 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
     egui::InnerResponse::new(inner.map(|r| r.inner), response)
 }
 
+fn inline_toggled_id() -> egui::Id {
+    egui::Id::unique("context-sheet-submenu-toggled")
+}
+
+/// A submenu row that opens its rows under it (indented) instead of beside it; tapped again, it
+/// closes. Its rows are the sheet's, so a tap on one runs it and closes the sheet as usual.
+fn inline_submenu<R>(ui: &mut Ui, button: egui::Button<'_>, contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    let response = ui.add(button);
+    let key = response.id.with("inline-submenu-open");
+    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|d| {
+            d.insert_temp(key, open);
+            // the sheet stays open for this tap ([`context_menu`])
+            d.insert_temp(inline_toggled_id(), true);
+        });
+    }
+    let center = pos2(response.rect.right() - ui.spacing().button_padding.x - 8.0, response.rect.center().y);
+    let icon = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+    paint(ui.painter(), Rect::from_center_size(center, vec2(16.0, 16.0)), icon, ui.style().interact(&response).fg_stroke.color);
+    let inner = open.then(|| ui.indent(key, contents).inner);
+    egui::InnerResponse::new(inner, response)
+}
+
 /// A context menu on `response`, as `Response::context_menu` gives, that a right-click moves
 /// (#1877). egui closes a menu on any click once it was open on the previous frame, and judges
 /// that by the menu's id: a right-click elsewhere on the same widget while its menu is open
@@ -86,9 +141,57 @@ pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> 
     if response.secondary_clicked() && carrying(&response.ctx) {
         return None;
     }
-    egui::Popup::context_menu(response)
-        .close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick))
-        .show(|ui| crate::menu_level::context_level(ui, 1, add_contents))
+    if !crate::panels::compact::is_compact(&response.ctx) {
+        return egui::Popup::context_menu(response)
+            .close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick))
+            .show(|ui| crate::menu_level::context_level(ui, 1, add_contents));
+    }
+    // (a tap inside closes it below, unless it opened or closed a submenu row)
+    let popup = egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClickOutside));
+    // the phone layout: a sheet across the bottom of the screen with finger-sized rows, over the
+    // screen dimmed, instead of a small menu at the finger (submenus still open beside their row)
+    let ctx = response.ctx.clone();
+    let screen = ctx.content_rect();
+    let t = Tokens::get(&ctx);
+    let frame = egui::Frame::NONE
+        .fill(t.chrome)
+        .stroke(egui::Stroke::new(1.0, t.divider))
+        .corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 })
+        .inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 16 });
+    let shown = popup
+        .anchor(egui::PopupAnchor::Position(pos2(screen.left(), screen.bottom())))
+        .align(egui::RectAlign::TOP_START)
+        .align_alternatives(&[])
+        .gap(0.0)
+        .width(screen.width() - 24.0)
+        .frame(frame)
+        .style(|s: &mut egui::Style| {
+            // (a menu's frameless rows, as the default menu style has them)
+            s.visuals.button_frame = false;
+            s.spacing.button_padding = vec2(14.0, 12.0);
+            s.spacing.interact_size.y = 44.0;
+            s.spacing.item_spacing.y = 2.0;
+            for style in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                if let Some(f) = s.text_styles.get_mut(&style) {
+                    f.size = 16.0;
+                }
+            }
+        })
+        .show(|ui| {
+            ui.set_min_width(screen.width() - 24.0);
+            register(ui, "panel:contextSheet", ui.max_rect());
+            crate::menu_level::context_level(ui, 1, add_contents)
+        });
+    if let Some(sheet) = &shown {
+        let dim = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("context-sheet-dim"));
+        ctx.layer_painter(dim).rect_filled(screen, 0.0, egui::Color32::from_black_alpha(110));
+        let toggled = ctx.data_mut(|d| d.remove_temp::<bool>(inline_toggled_id())).unwrap_or(false);
+        let tapped_inside = ctx.input(|i| i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| sheet.response.rect.contains(p)));
+        if tapped_inside && !toggled && !response.secondary_clicked() {
+            egui::Popup::close_id(&ctx, egui::Popup::default_response_id(response));
+        }
+    }
+    shown
 }
 
 /// Record whether photos are being carried as the frame starts, for [`context_menu`] to read. A
@@ -252,15 +355,16 @@ pub fn note_pointer(ctx: &egui::Context) {
     double_tap_options(ctx);
 }
 
-/// Longest time between the two taps of a double tap (release to press, s).
-const DOUBLE_TAP: f64 = 0.5;
+/// Longest time between the two taps of a double tap (release to press, s). A single tap on the
+/// photo waits this long before it hides or shows the editor's bars, so it is kept short.
+const DOUBLE_TAP: f64 = 0.3;
 
 /// How far apart the two taps of a double tap may land (points).
 const DOUBLE_TAP_DIST: f32 = 24.0;
 
 /// egui counts a double click when the second click lands within `max_click_dist` (6 pt) of the
 /// first and within `max_double_click_delay` (0.3 s): a mouse makes that, fingers seldom do (they
-/// land a few points apart, and tap slower). With a finger the delay is [`DOUBLE_TAP`], and for
+/// land a few points apart). With a finger the delay is [`DOUBLE_TAP`], and for
 /// that long after a tap the distance is [`DOUBLE_TAP_DIST`], so every `double_clicked()` takes a
 /// double tap. Only then: `max_click_dist` is also how far a press moves before it is a drag, and
 /// a larger one at other times would make a finger's scroll start late. A mouse keeps egui's
@@ -1067,10 +1171,13 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
 /// A small bordered text button (Auto, B&W, HDR…).
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
+    // (a key hint, "Swap Aspect (X)", means nothing where there is no keyboard)
+    let finger = finger_ui(ui);
+    let label = if finger { split_key_hint(label).0 } else { label };
     let t = Tokens::get(ui.ctx());
-    let font = t.semibold(11.5);
+    let (font, h) = text_button_font(ui);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
-    let size = vec2(text_button_width(galley.size().x), 24.0);
+    let size = vec2(text_button_width(ui, galley.size().x), h);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     register(ui, format!("button:{id}"), r);
@@ -1082,26 +1189,54 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
         t.button
     };
     let p = ui.painter();
+    if finger {
+        // a phone's button: a rounded fill without a frame, tinted with the accent when on
+        let (fill, text) = if active { (t.accent.gamma_multiply(0.22), t.accent) } else { (t.button, t.text) };
+        let fill = if resp.is_pointer_button_down_on() { fill.gamma_multiply(0.7) } else { fill };
+        p.rect_filled(r, CornerRadius::same(10), fill);
+        let galley = ui.painter().layout_no_wrap(label.to_string(), text_button_font(ui).0, text);
+        p.galley(r.center() - galley.size() / 2.0, galley, text);
+        return resp;
+    }
     p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
 }
 
+/// Where controls are finger-sized ([`crate::panels::compact::finger_style`]): a phone's dialogs.
+pub(crate) fn finger_ui(ui: &Ui) -> bool {
+    ui.spacing().interact_size.y >= 44.0
+}
+
+/// A phone's controls: finger-sized ones, or anything in the compact (phone) layout, the
+/// editor's sheet among them. Switches and segmented controls take the system's look there.
+pub(crate) fn phone_ui(ui: &Ui) -> bool {
+    finger_ui(ui) || crate::panels::compact::is_compact(ui.ctx())
+}
+
+/// A [`text_button`]'s label font and height: larger where controls are finger-sized.
+fn text_button_font(ui: &Ui) -> (egui::FontId, f32) {
+    let t = Tokens::get(ui.ctx());
+    if finger_ui(ui) { (t.semibold(15.0), 44.0) } else { (t.semibold(11.5), 24.0) }
+}
+
 /// The width of a [`text_button`] whose label is `text_width` wide.
-fn text_button_width(text_width: f32) -> f32 {
-    (text_width + 18.0).max(37.0)
+fn text_button_width(ui: &Ui, text_width: f32) -> f32 {
+    if finger_ui(ui) { (text_width + 28.0).max(48.0) } else { (text_width + 18.0).max(37.0) }
 }
 
 /// The width [`text_button`] takes for `label` (translated as it would be), to plan a row before drawing it.
 pub fn text_button_size(ui: &Ui, label: &str) -> f32 {
-    let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.semibold(11.5), t.text);
-    text_button_width(galley.size().x)
+    let galley = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), text_button_font(ui).0, Color32::WHITE);
+    text_button_width(ui, galley.size().x)
 }
 
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
 /// addressable as `button:{id}-{key}` (keys parallel to labels). Returns the clicked index.
 pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {
+    if phone_ui(ui) {
+        return phone_segmented(ui, id, items, active, per_row);
+    }
     let t = Tokens::get(ui.ctx());
     let per_row = per_row.max(1);
     let gap = 4.0;
@@ -1114,7 +1249,7 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
             for (j, (label, key)) in row.iter().enumerate() {
                 let label = crate::i18n::tr(label);
                 let i = row_i * per_row + j;
-                let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(seg_w, text_button_font(ui).1), Sense::click());
                 crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
                 register(ui, format!("button:{id}-{key}"), r);
                 let fill = if active == Some(i) {
@@ -1126,7 +1261,7 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 };
                 let p = ui.painter();
                 p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                p.text(r.center(), Align2::CENTER_CENTER, label, text_button_font(ui).0, t.text);
                 if resp.clicked() {
                     clicked = Some(i);
                 }
@@ -1134,6 +1269,136 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
         });
     }
     clicked
+}
+
+/// [`segmented`] on a phone: the system's segmented control, a rounded track with the chosen
+/// segment raised in it, rows of `per_row` (ids as the desktop's).
+fn phone_segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let per_row = per_row.max(1);
+    let mut clicked = None;
+    for (row_i, row) in items.chunks(per_row).enumerate() {
+        let w = ui.available_width();
+        let (track, _) = ui.allocate_exact_size(vec2(w, 36.0), Sense::hover());
+        ui.painter().rect_filled(track, CornerRadius::same(9), t.button);
+        let seg_w = (track.width() - 4.0) / per_row as f32;
+        for (j, (label, key)) in row.iter().enumerate() {
+            let label = crate::i18n::tr(label);
+            let i = row_i * per_row + j;
+            let r = Rect::from_min_size(pos2(track.left() + 2.0 + seg_w * j as f32, track.top() + 2.0), vec2(seg_w, track.height() - 4.0));
+            let resp = ui.interact(r, egui::Id::unique(("phone-segment", id, i)), Sense::click());
+            crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
+            register(ui, format!("button:{id}-{key}"), r);
+            let on = active == Some(i);
+            let p = ui.painter();
+            if on {
+                p.rect_filled(r, CornerRadius::same(7), t.pressed);
+            }
+            let font = if on { t.semibold(13.5) } else { t.font(13.5) };
+            p.text(r.center(), Align2::CENTER_CENTER, label, font, t.text);
+            if resp.clicked() {
+                clicked = Some(i);
+            }
+        }
+    }
+    clicked
+}
+
+/// A check box, or where controls are finger-sized (a phone's sheets) the system's switch row:
+/// the label on the left, the switch at the right edge, the whole row a target. As
+/// [`Ui::checkbox`], the response says when it changed.
+pub(crate) fn checkbox(ui: &mut Ui, value: &mut bool, label: impl AsRef<str>) -> Response {
+    let label = label.as_ref();
+    if !finger_ui(ui) {
+        return ui.checkbox(value, label);
+    }
+    const SWITCH: egui::Vec2 = vec2(50.0, 30.0);
+    let t = Tokens::get(ui.ctx());
+    // (inside what's shown: a scrolling sheet's room can reach under its clipped edge)
+    let w = ui.available_width().min(ui.clip_rect().right() - ui.cursor().left() - 2.0).max(SWITCH.x + 40.0);
+    let galley = ui.painter().layout(label.to_string(), t.font(16.0), t.text, (w - SWITCH.x - 16.0).max(40.0));
+    let h = (galley.size().y + 12.0).max(44.0);
+    let (r, mut resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
+    if resp.clicked() && ui.is_enabled() {
+        *value = !*value;
+        resp.mark_changed();
+    }
+    let on = *value;
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, label));
+    let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.4) };
+    let p = ui.painter();
+    p.galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, fade(t.text));
+    let how_on = ui.ctx().animate_bool_responsive(resp.id, on);
+    let track = Rect::from_center_size(pos2(r.right() - SWITCH.x / 2.0, r.center().y), SWITCH);
+    p.rect_filled(track, SWITCH.y / 2.0, fade(lerp(t.text_dim.gamma_multiply(0.35), t.accent, how_on)));
+    let knob_x = egui::lerp((track.left() + SWITCH.y / 2.0)..=(track.right() - SWITCH.y / 2.0), how_on);
+    p.circle_filled(pos2(knob_x, track.center().y), SWITCH.y / 2.0 - 3.0, fade(Color32::WHITE));
+    resp
+}
+
+/// A phone's row of choices as pills that scroll sideways when they don't fit (an aspect ratio,
+/// a filter): the chosen one filled with the accent (`button:{id}-{key}`). Returns the index tapped.
+pub(crate) fn chip_row(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let mut clicked = None;
+    let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() };
+    egui::ScrollArea::horizontal()
+        .id_salt(("chip-row", id))
+        .scroll_source(drag)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for (i, (label, key)) in items.iter().enumerate() {
+                    let label = crate::i18n::tr(label);
+                    let on = active == Some(i);
+                    let font = if on { t.semibold(14.0) } else { t.font(14.0) };
+                    let galley = ui.painter().layout_no_wrap(label.to_string(), font, if on { Color32::WHITE } else { t.text });
+                    let (r, resp) = ui.allocate_exact_size(vec2(galley.size().x + 28.0, 36.0), Sense::click());
+                    announce_selected(&resp, label.to_string(), on);
+                    register(ui, format!("button:{id}-{key}"), r);
+                    let fill = if on { t.accent } else { t.button };
+                    let fill = if resp.is_pointer_button_down_on() { fill.gamma_multiply(0.7) } else { fill };
+                    ui.painter().rect_filled(r, CornerRadius::same(18), fill);
+                    ui.painter().galley(r.center() - galley.size() / 2.0, galley, Color32::WHITE);
+                    if resp.clicked() {
+                        clicked = Some(i);
+                    }
+                }
+            });
+        });
+    clicked
+}
+
+/// A phone's row of tools: a round button each with its name under it, spread across the width
+/// (`button:{id}`; `on` lit with the accent). Returns the id tapped.
+pub(crate) fn tool_buttons<'a>(ui: &mut Ui, tools: &[(&'a str, Icon, &str, bool)]) -> Option<&'a str> {
+    let t = Tokens::get(ui.ctx());
+    let n = tools.len().max(1) as f32;
+    let w = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(vec2(w, 66.0), Sense::hover());
+    let cell = row.width() / n;
+    let mut tapped = None;
+    for (i, (id, icon, label, on)) in tools.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(row.left() + cell * i as f32, row.top()), vec2(cell, row.height()));
+        let resp = ui.interact(r, egui::Id::unique(("phone-tool", *id)), Sense::click());
+        let label = crate::i18n::tr(label);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, *on, label));
+        register(ui, format!("button:{id}"), r);
+        let disc = Rect::from_center_size(pos2(r.center().x, r.top() + 22.0), vec2(42.0, 42.0));
+        let p = ui.painter();
+        let fill = if *on { t.accent.gamma_multiply(0.22) } else { t.button };
+        let fill = if resp.is_pointer_button_down_on() { fill.gamma_multiply(0.7) } else { fill };
+        p.circle_filled(disc.center(), 21.0, fill);
+        let color = if *on { t.accent } else { t.icon };
+        crate::icons::paint(p, disc.shrink(11.0), *icon, color);
+        p.text(pos2(r.center().x, r.bottom() - 8.0), Align2::CENTER_CENTER, label, t.font(11.0), if *on { t.accent } else { t.text_dim });
+        if resp.clicked() {
+            tapped = Some(*id);
+        }
+    }
+    tapped
 }
 
 /// Splits a tooltip that ends in its key hint ("Edit (E)", "Import Photos… (⌘⇧I)") into the label

@@ -42,6 +42,10 @@ pub enum Size {
     Large,
 }
 
+/// A finger's control height: a [`Button`] (other than [`Size::Small`]) grows to it where the
+/// ui's controls are this tall ([`crate::panels::compact::finger_style`]).
+const FINGER: f32 = 44.0;
+
 impl Size {
     pub const fn height(self) -> f32 {
         match self {
@@ -308,7 +312,9 @@ impl<'a> Button<'a> {
 
     /// How big it is drawn.
     pub fn desired_size(&self, ui: &Ui) -> Vec2 {
-        let h = self.size.height();
+        // as tall as the controls round it where they are finger-sized (a phone's dialogs)
+        let finger = ui.spacing().interact_size.y >= FINGER;
+        let h = if finger && self.size != Size::Small { self.size.height().max(FINGER) } else { self.size.height() };
         let text_w = self.galley(ui).map_or(0.0, |g| g.size().x);
         let w = match (self.icon.is_some(), text_w > 0.0) {
             // an icon alone: a square

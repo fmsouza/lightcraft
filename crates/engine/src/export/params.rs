@@ -1,3 +1,4 @@
+use super::border::{BORDER_MAX_RATIO, BORDER_THICKNESS_RANGE, Border};
 use super::options::{Conflict, DestinationMode, ExportFormat, HdrCurve, MetadataPolicy, Resize, ResizeMode, SharpenAmount, SharpenFor};
 use super::prepare::DngCompression;
 use super::watermark::{Anchor, Watermark};
@@ -32,6 +33,7 @@ impl Default for ExportOptions {
             add_to_photos: false,
             photos_album: String::new(),
             hdr_transfer: HdrCurve::Pq,
+            border: None,
         }
     }
 }
@@ -76,7 +78,11 @@ pub const OPTION_PARAMS: &[&str] = &[
     "addToPhotos",
     "photosAlbum",
     "hdrTransfer",
+    "border",
 ];
+
+/// The keys of a `border` object ([`Border`], camelCase).
+pub const BORDER_PARAMS: &[&str] = &["color", "thickness", "ratio"];
 
 /// Why an export can't add its files to Apple Photos on this platform (`None`: it can, when the
 /// session has the runner; see [`crate::Session::after_export`]).
@@ -317,6 +323,7 @@ impl ExportOptions {
                     }
                 }
                 "watermark" => Self::validate_watermark(cmd, v)?,
+                "border" => Self::validate_border(cmd, v)?,
                 "id" => {
                     int(k, v, 0, i64::MAX)?;
                 }
@@ -339,6 +346,39 @@ impl ExportOptions {
                 let list = if list.is_empty() { last } else { format!("{} or {last}", list.join(", ")) };
                 let name = serde_json::to_value(format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
                 return Err(bad(format!("`bitDepth` must be {list} for {name}")));
+            }
+        }
+        Ok(())
+    }
+
+    /// A `border` value: `{color?: [r, g, b], thickness?: 0..0.25, ratio?: [w, h] | "w:h" | null}`.
+    pub(crate) fn validate_border(cmd: &str, v: &serde_json::Value) -> crate::Result<()> {
+        let bad = |msg: String| crate::cmd::bad(cmd, msg);
+        let Some(o) = v.as_object() else {
+            return Err(bad("`border` must be an object {color, thickness, ratio}".into()));
+        };
+        for (k, v) in o {
+            match k.as_str() {
+                "color" => {
+                    let ok = v.as_array().is_some_and(|a| a.len() == 3 && a.iter().all(|c| c.as_u64().is_some_and(|c| c <= 255)));
+                    if !ok {
+                        return Err(bad("`border.color` must be [r, g, b] with 0..255 each (sRGB)".into()));
+                    }
+                }
+                "thickness" => {
+                    let (lo, hi) = BORDER_THICKNESS_RANGE;
+                    if !v.as_f64().is_some_and(|t| t.is_finite() && (f64::from(lo)..=f64::from(hi)).contains(&t)) {
+                        return Err(bad(format!("`border.thickness` must be a number {lo}..{hi} (a fraction of the photo's long edge)")));
+                    }
+                }
+                "ratio" => {
+                    if !v.is_null() && border_ratio(v).is_none() {
+                        return Err(bad(format!(
+                            "`border.ratio` must be [width, height] or \"width:height\", at most {BORDER_MAX_RATIO}:1 either way"
+                        )));
+                    }
+                }
+                _ => return Err(bad(unknown_key("border key", k, BORDER_PARAMS))),
             }
         }
         Ok(())
@@ -455,6 +495,7 @@ impl ExportOptions {
             add_to_photos: p.get("addToPhotos").and_then(Value::as_bool).unwrap_or(d.add_to_photos),
             photos_album: s("photosAlbum").map_or(d.photos_album, |a| a.trim().to_string()),
             hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
+            border: p.get("border").filter(|v| v.is_object()).map(border_from_json),
         }
     }
 
@@ -612,4 +653,33 @@ impl ExportOptions {
             format!("{name}.{}", self.format.extension())
         }
     }
+}
+
+/// A `border.ratio`: `[w, h]` or `"w:h"`, when it's a shape [`Border`] draws.
+fn border_ratio(v: &serde_json::Value) -> Option<[u16; 2]> {
+    let pair = match v {
+        serde_json::Value::Array(a) if a.len() == 2 => [a.first()?.as_u64()?, a.get(1)?.as_u64()?],
+        serde_json::Value::String(s) => {
+            let (w, h) = s.split_once(':')?;
+            [w.trim().parse().ok()?, h.trim().parse().ok()?]
+        }
+        _ => return None,
+    };
+    let ratio = [u16::try_from(pair[0]).ok()?, u16::try_from(pair[1]).ok()?];
+    Border { ratio: Some(ratio), ..Border::default() }.shape().map(|_| ratio)
+}
+
+/// A `border` object as a [`Border`]: what is missing or out of range keeps the default.
+fn border_from_json(v: &serde_json::Value) -> Border {
+    let d = Border::default();
+    let color = v
+        .get("color")
+        .and_then(serde_json::Value::as_array)
+        .filter(|a| a.len() == 3)
+        .and_then(|a| Some([a.first()?.as_u64()?.min(255) as u8, a.get(1)?.as_u64()?.min(255) as u8, a.get(2)?.as_u64()?.min(255) as u8]))
+        .unwrap_or(d.color);
+    let (lo, hi) = BORDER_THICKNESS_RANGE;
+    let thickness =
+        v.get("thickness").and_then(serde_json::Value::as_f64).filter(|t| t.is_finite()).map_or(d.thickness, |t| (t as f32).clamp(lo, hi));
+    Border { color, thickness, ratio: v.get("ratio").and_then(border_ratio) }
 }

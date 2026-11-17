@@ -133,7 +133,7 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             let mut v = app.ui.point_color_visualize;
-            if ui.checkbox(&mut v, crate::i18n::tr("Visualize range")).changed() {
+            if crate::panels::settings::check(ui, "pointColorVisualize", &mut v, "Visualize range") {
                 app.ui.point_color_visualize = v;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

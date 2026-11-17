@@ -118,6 +118,8 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            export_handoff: None,
+            device_turn: 0,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
@@ -672,6 +674,7 @@ impl LightcraftApp {
         let content = ui.ctx().content_rect();
         widgets::note_pointer(ui.ctx());
         panels::compact::update(self, &ui.ctx().clone(), content);
+        panels::back::on_back_key(self, &ui.ctx().clone());
         if content != ui.max_rect() {
             ui.painter().rect_filled(ui.max_rect(), 0.0, theme::Tokens::get(ui.ctx()).chrome);
         }
@@ -679,6 +682,9 @@ impl LightcraftApp {
         // when the insets change, as when the soft keyboard comes up
         let mut inner = ui.new_child(egui::UiBuilder::new().id_salt("safe-area").max_rect(content));
         self.layout(&mut inner);
+        if self.ui.settings.show_touches {
+            crate::touch_marks::show_touches(ui.ctx());
+        }
     }
 
     fn layout(&mut self, ui: &mut egui::Ui) {
@@ -689,9 +695,11 @@ impl LightcraftApp {
             return;
         }
         self.sync_theme(&ctx);
+        crate::native_menu::run_picks(self, &ctx);
         self.ui_pass(&ctx);
         self.draw_window(ui);
         self.finish_ui_pass(&ctx);
+        crate::native_menu::sync(self, &ctx);
     }
 }
 

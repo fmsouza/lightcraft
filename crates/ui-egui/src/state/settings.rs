@@ -166,6 +166,9 @@ pub struct AppSettings {
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
+    /// Interface ▸ Show touches: a dot where each finger is and a ring where it lifted, for
+    /// screen recordings (they don't show touches). Phones and tablets.
+    pub show_touches: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -234,6 +237,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             loupe_messages: true,
+            show_touches: false,
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,

@@ -15,8 +15,10 @@ BIN=$(ls -d "$NDK"/toolchains/llvm/prebuilt/*/bin)
 export CC_aarch64_linux_android="$BIN/aarch64-linux-android$API-clang"
 export AR_aarch64_linux_android="$BIN/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$BIN/aarch64-linux-android$API-clang"
-$CARGO build --release -p lightcraft-mobile --lib --target aarch64-linux-android
-OUT=${CARGO_TARGET_DIR:-target}/aarch64-linux-android/release
+# PROFILE=release keeps symbols (mobile by default: optimized and stripped)
+PROFILE=${PROFILE:-mobile}
+$CARGO build --profile "$PROFILE" -p lightcraft-mobile --lib --target aarch64-linux-android
+OUT=${CARGO_TARGET_DIR:-target}/aarch64-linux-android/$PROFILE
 WORK=$OUT/apk
 rm -rf "$WORK" && mkdir -p "$WORK/stage/lib/arm64-v8a"
 cp "$OUT/liblightcraft_mobile.so" "$WORK/stage/lib/arm64-v8a/"
@@ -32,7 +34,10 @@ cp "$WORK/dex/classes.dex" "$WORK/stage/"
     "$WORK/res.zip"
 (cd "$WORK/stage" && zip -q -0 -r ../base.apk lib classes.dex)
 "$BT/zipalign" -f -p 4 "$WORK/base.apk" "$WORK/aligned.apk"
-KS=$OUT/lightcraft-debug.keystore
+# (kept outside target/: `cargo clean` would otherwise make a new key, and Android refuses to
+# update an app signed with another)
+KS=${LIGHTCRAFT_KEYSTORE:-$HOME/.android/lightcraft-debug.keystore}
+mkdir -p "$(dirname "$KS")"
 [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass android -keypass android -alias debug \
     -keyalg RSA -validity 3650 -dname "CN=LightCraft debug" >/dev/null 2>&1
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --out "$OUT/lightcraft-mobile.apk" "$WORK/aligned.apk"

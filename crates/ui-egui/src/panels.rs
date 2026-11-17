@@ -1,6 +1,7 @@
 //! Window regions and panels.
 
 pub mod activity;
+pub mod back;
 pub mod bottombar;
 pub mod chips;
 pub mod compact;
@@ -10,6 +11,7 @@ pub mod denoise;
 pub mod detail;
 pub mod edit;
 pub mod empty_library;
+pub mod filter_sheet;
 pub mod filterbar;
 pub mod grid;
 pub mod histogram;
@@ -20,14 +22,18 @@ pub mod left;
 pub mod library_problem;
 pub mod mask_effects;
 pub mod masking;
+pub mod more_sheet;
 pub mod notices;
 pub mod people;
 pub mod person;
 pub mod presets;
 pub mod profiles;
+pub mod rate_sheet;
 pub mod right;
 pub mod second;
+pub mod share_sheet;
 pub mod slideshow;
+pub mod sort_sheet;
 pub mod strip;
 pub mod topbar;
 pub mod unnamed;

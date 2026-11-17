@@ -2615,5 +2615,8 @@
   "Top bar": "Верхняя панель",
   "Tool strip": "Панель инструментов",
   "Bottom bar": "Нижняя панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
+  "Touch": "Касание",
+  "Show touches": "Показывать касания",
+  "A dot where a finger is and a ring where it lifted, for screen recordings.": "Точка там, где палец, и кольцо там, где он поднят, для записи экрана."
 }

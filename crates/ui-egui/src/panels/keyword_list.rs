@@ -15,6 +15,26 @@ use crate::widgets::register;
 
 /// Rows are this tall; each level is indented this much.
 const ROW_H: f32 = 24.0;
+
+/// A row's sizes here: its height, its tick box's, how far the box's target reaches past it, and
+/// the disclosure triangle's target width (a finger's in a phone's sheet, where the controls are
+/// finger-sized; 0: the triangle's own 16 pt).
+struct Sizes {
+    row: f32,
+    tick: f32,
+    tick_reach: f32,
+    triangle_w: f32,
+    /// The name's text size.
+    name: f32,
+}
+
+fn sizes(ui: &egui::Ui) -> Sizes {
+    if crate::widgets::finger_ui(ui) {
+        Sizes { row: 44.0, tick: 20.0, tick_reach: 12.0, triangle_w: 28.0, name: 16.0 }
+    } else {
+        Sizes { row: ROW_H, tick: 13.0, tick_reach: 3.0, triangle_w: 0.0, name: 13.0 }
+    }
+}
 const INDENT: f32 = 14.0;
 
 /// The Keyword List section: a filter box, then the rows.
@@ -44,20 +64,25 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let fid = egui::Id::unique("keyword-list-filter");
     let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
+    let finger = crate::widgets::finger_ui(ui);
+    // + and − beside the filter: square finger targets in a phone's sheet
+    let button = if finger { vec2(44.0, 44.0) } else { vec2(0.0, 0.0) };
     ui.horizontal(|ui| {
-        ui.add_space(24.0);
+        ui.add_space(if finger { 16.0 } else { 24.0 });
+        let gap = ui.spacing().item_spacing.x;
+        let reserve = if finger { 2.0 * (button.x + gap) + 16.0 } else { 82.0 };
         crate::text_field::TextField::singleline("field:keywordFilter", &mut filter)
             .hint(crate::i18n::tr("Filter Keywords"))
-            .width(ui.available_width() - 82.0)
+            .width((ui.available_width() - reserve).max(60.0))
             .show(ui);
         // + creates a keyword (inside the picked one), − deletes the picked one
-        let plus = ui.button("+").on_hover_text(crate::i18n::tr("Create Keyword Tag"));
+        let plus = ui.add(egui::Button::new("+").min_size(button)).on_hover_text(crate::i18n::tr("Create Keyword Tag"));
         register(ui, "keywordList:create", plus.rect);
         if plus.clicked() {
             app.ui.dialog = Some(create_dialog(app));
         }
         let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
-        let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
+        let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−").min_size(button)).on_hover_text(crate::i18n::tr("Delete Keyword"));
         register(ui, "keywordList:delete", minus.rect);
         if minus.clicked()
             && let Some(k) = picked
@@ -168,7 +193,8 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), crate::widgets::list_item_sense(ui.ctx()));
+    let size = sizes(ui);
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), size.row), crate::widgets::list_item_sense(ui.ctx()));
     crate::widgets::announce(&resp, r.path.clone());
     register(ui, format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {
@@ -188,7 +214,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if r.has_children {
         let c = pos2(x + 6.0, cy);
         let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
-        let tr = ui.interact(tri, egui::Id::unique(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
+        // (on a phone a finger's target: the row's height)
+        let hit = if size.triangle_w > 0.0 { Rect::from_center_size(c, vec2(size.triangle_w, rect.height())) } else { tri };
+        let tr = ui.interact(hit, egui::Id::unique(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
         crate::widgets::announce(&tr, super::left::disclosure_name(r.open, &r.name));
         register(ui, format!("keywordRowToggle:{}", r.path), tri);
         // while a filter opens the levels the triangle does nothing: it doesn't light up either
@@ -206,11 +234,11 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     // the tick box: does the selection have it?
     let state = ticks.tick(&r.path);
     let inside = ticks.inside(&r.path);
-    let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
+    let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(size.tick, size.tick));
     let on = !selection.is_empty();
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { crate::widgets::list_item_sense(ui.ctx()) } else { Sense::hover() };
-    let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
+    let tb = ui.interact(boxr.expand(size.tick_reach), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
     crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
     register(ui, format!("keywordCheck:{}", r.path), boxr);
     let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
@@ -273,12 +301,14 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     // the name, cut short before the arrow, leaving room for the dot and the + that follow it
     let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, &r.path));
     let in_shortcut = app.session.catalog.keyword_info(&r.path).is_some_and(|i| i.keyword_shortcut);
-    let font = t.font(13.0);
+    let font = t.font(size.name);
+    // (after the tick box, whatever its size)
+    let name_x = x + 34.0 + (size.tick - 13.0);
     let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x;
     let marks = if is_default { 10.0 } else { 0.0 } + if in_shortcut { 5.0 + measure("+") } else { 0.0 };
-    let room = (arrow.left() - 4.0 - (x + 34.0) - marks).max(0.0);
+    let room = (arrow.left() - 4.0 - name_x - marks).max(0.0);
     let name = if measure(&r.name) <= room { r.name.clone() } else { crate::widgets::elide_head(&r.name, room, measure) };
-    let label = ui.painter().text(pos2(x + 34.0, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
+    let label = ui.painter().text(pos2(name_x, cy), Align2::LEFT_CENTER, name, font.clone(), if picked { t.text } else { t.text_label });
     // where new keywords go (Put New Keywords Inside This Keyword): a dot after the name
     let mut after = label.right();
     if is_default {

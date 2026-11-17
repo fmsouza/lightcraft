@@ -20,9 +20,19 @@ mod android_jni;
 #[cfg(target_os = "ios")]
 mod ios_files;
 #[cfg(target_os = "ios")]
+mod ios_fonts;
+#[cfg(target_os = "ios")]
+mod ios_haptics;
+#[cfg(target_os = "ios")]
 mod ios_keys;
 #[cfg(target_os = "ios")]
+mod ios_menu;
+#[cfg(target_os = "ios")]
+mod ios_orientation;
+#[cfg(target_os = "ios")]
 mod ios_pencil;
+#[cfg(target_os = "ios")]
+mod ios_photos;
 #[cfg(target_os = "ios")]
 mod ios_picker;
 #[cfg(target_os = "ios")]
@@ -123,6 +133,25 @@ impl App {
     /// Picked files being copied into the app (the photo picker's, a folder's): a row in the
     /// activity stack with the count and the file, whose ✕ stops the copy after the current file
     /// (what was copied is imported).
+    /// Report the Share sheet's saves to the photo library once the system has answered.
+    fn photos_saved(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "ios")]
+        let done = ios_photos::take_results();
+        #[cfg(target_os = "android")]
+        let done = ANDROID_APP.get().map(android_jni::take_saved).unwrap_or_default();
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        let done: Vec<Result<usize, String>> = Vec::new();
+        for r in done {
+            let msg = match r {
+                Ok(1) => lightcraft_ui_egui::i18n::tr("Saved to Photos").to_string(),
+                Ok(n) => format!("{} {n}", lightcraft_ui_egui::i18n::tr("Photos saved:")),
+                Err(why) => format!("{} {why}", lightcraft_ui_egui::i18n::tr("Couldn't save to Photos:")),
+            };
+            log::info!("{msg}");
+            self.app.toast(ctx, msg);
+        }
+    }
+
     #[cfg(target_os = "android")]
     fn copy_row(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
@@ -277,6 +306,71 @@ fn drag_value_text(ctx: &egui::Context, id: egui::Id, value: f64) -> Option<Stri
 #[cfg(target_os = "android")]
 static PICKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The density (dpi) the interface was last scaled for (Android).
+#[cfg(target_os = "android")]
+static DENSITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Android: the screen's resolution changed while the app runs (Samsung's HD+ / FHD+ / WQHD+,
+/// Display size): winit keeps the scale it read at launch (and so does android-activity's copy of
+/// the configuration), so the interface came out too large or too small until the app was
+/// restarted. After the window's size changes, the activity is asked for its density for a couple
+/// of seconds (the window is resized before the new density is reported), and egui's zoom makes up
+/// the difference (dp = dpi / 160), so sizes stay the same in points.
+#[cfg(target_os = "android")]
+fn follow_density(ctx: &egui::Context) {
+    use std::sync::atomic::Ordering;
+    /// The window's size in pixels last frame, and until when (seconds) the density is checked.
+    static WATCH: std::sync::Mutex<(f32, f32, f64)> = std::sync::Mutex::new((0.0, 0.0, 0.0));
+    let Some(activity) = ANDROID_APP.get() else { return };
+    let (native, size, now) = ctx.input(|i| (i.viewport().native_pixels_per_point.unwrap_or(1.0), i.viewport_rect().size(), i.time));
+    let px = size * ctx.pixels_per_point();
+    {
+        let mut w = WATCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if (w.0 - px.x).abs() >= 1.0 || (w.1 - px.y).abs() >= 1.0 {
+            *w = (px.x, px.y, now + 2.0);
+        }
+        if now > w.2 {
+            return;
+        }
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let Some(dpi) = android_jni::density_dpi(activity) else { return };
+    if DENSITY.swap(dpi, Ordering::Relaxed) == dpi || native <= 0.0 {
+        return;
+    }
+    let zoom = dpi as f32 / 160.0 / native;
+    if (ctx.zoom_factor() - zoom).abs() > 0.01 {
+        log::warn!("density {dpi} dpi: interface zoom {zoom:.3} (the window's scale {native})");
+        ctx.set_zoom_factor(zoom);
+    }
+}
+
+/// "…"'s popup is open (Android): its picks are looked for each frame until it closes.
+#[cfg(target_os = "android")]
+static MENU_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Android: what "…"'s popup picked runs, and Back with nowhere left to go in the app
+/// ([`lightcraft_ui_egui::panels::back`]) leaves it.
+#[cfg(target_os = "android")]
+fn menu_and_back(ctx: &egui::Context) {
+    use std::sync::atomic::Ordering;
+    let Some(activity) = ANDROID_APP.get() else { return };
+    if MENU_OPEN.load(Ordering::Relaxed)
+        && let Some(picks) = android_jni::take_menu_picks(activity)
+    {
+        MENU_OPEN.store(false, Ordering::Relaxed);
+        for p in picks {
+            let (id, params) = p.split_once('\t').unwrap_or((p.as_str(), "{}"));
+            lightcraft_ui_egui::native_menu::pick(id, serde_json::from_str(params).unwrap_or_else(|_| serde_json::json!({})));
+        }
+        ctx.request_repaint();
+    }
+    // (Back itself reaches the UI as a key: winit takes it before the activity sees it)
+    if lightcraft_ui_egui::panels::back::take_leave() {
+        android_jni::leave(activity);
+    }
+}
+
 /// A document pick (a command's file or folder dialog) is under way: its files are copied in.
 #[cfg(target_os = "android")]
 static DOC_PICKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -311,6 +405,17 @@ impl eframe::App for App {
         }
         #[cfg(target_os = "android")]
         self.copy_row(ctx);
+        #[cfg(target_os = "android")]
+        menu_and_back(ctx);
+        #[cfg(target_os = "android")]
+        follow_density(ctx);
+        self.photos_saved(ctx);
+        // which way the phone is held: the editor shows the photo alone, turned, when sideways
+        #[cfg(target_os = "ios")]
+        {
+            ios_orientation::start(ctx);
+            self.app.device_turn = ios_orientation::turn();
+        }
         memory::poll(&mut self.app.session);
         self.app.logic(ctx);
         // the settings, a few seconds after a change (a phone may stop the app without asking)
@@ -370,7 +475,9 @@ impl eframe::App for App {
 
 /// `export_dir`: where exports go by default (next to the library, inside the sandbox; on iOS
 /// `Documents/`, so they show in the Files app too).
-fn services(export_dir: String) -> Services {
+fn services(export_dir: String, ctx: &egui::Context) -> Services {
+    #[cfg(not(target_os = "ios"))]
+    let _ = ctx;
     let saves = std::path::PathBuf::from(&export_dir);
     Services {
         export_dir: Some(export_dir),
@@ -381,6 +488,18 @@ fn services(export_dir: String) -> Services {
         share: Some(Box::new(|paths: &[String]| {
             if let Some(app) = ANDROID_APP.get() {
                 android_jni::share(app, paths);
+            }
+        })),
+        // the Share sheet's Save to Photos: straight into the photo library (the gallery)
+        #[cfg(target_os = "ios")]
+        save_to_photos: Some(Box::new({
+            let ctx = ctx.clone();
+            move |paths: &[String]| ios_photos::save(paths, ctx.clone())
+        })),
+        #[cfg(target_os = "android")]
+        save_to_photos: Some(Box::new(|paths: &[String]| {
+            if let Some(app) = ANDROID_APP.get() {
+                android_jni::save_to_gallery(app, paths);
             }
         })),
         // atomic (temp file + sync + rename), inside the sandbox
@@ -409,6 +528,34 @@ fn services(export_dir: String) -> Services {
         // iOS: a picked folder outside the sandbox is readable only for a while, so the library
         // copies it; Android's picker copies a folder into the library already
         import_copies: cfg!(target_os = "ios"),
+        mobile: true,
+        // "…" opens the system's menu
+        #[cfg(target_os = "ios")]
+        menu_button: Some(Box::new({
+            let ctx = ctx.clone();
+            move |request| ios_menu::update(request, &ctx)
+        })),
+        // a knock where a finger's action took effect (a long press, a slide selecting)
+        #[cfg(target_os = "ios")]
+        haptic: Some(Box::new(ios_haptics::knock)),
+        #[cfg(target_os = "android")]
+        haptic: Some(Box::new(|kind| {
+            if let Some(activity) = ANDROID_APP.get() {
+                android_jni::haptic(activity, kind);
+            }
+        })),
+        // tapping "…" opens the system's popup menu under it
+        #[cfg(target_os = "android")]
+        open_menu: Some(Box::new({
+            let ctx = ctx.clone();
+            move |rect: egui::Rect, items: &[lightcraft_ui_egui::native_menu::NativeItem]| {
+                let Some(activity) = ANDROID_APP.get() else { return };
+                let ppp = ctx.pixels_per_point();
+                MENU_OPEN.store(true, std::sync::atomic::Ordering::Relaxed);
+                let json = lightcraft_ui_egui::native_menu::to_json(items).to_string();
+                android_jni::show_menu(activity, rect.right() * ppp, rect.bottom() * ppp, &json);
+            }
+        })),
         #[cfg(target_os = "ios")]
         open_url: Some(Box::new(|url: &str| https(url).and_then(ios_files::open_url))),
         #[cfg(target_os = "android")]
@@ -598,6 +745,9 @@ pub fn run(mut options: eframe::NativeOptions, library_dir: std::path::PathBuf, 
                     lightcraft_ui_egui::theme::add_fallback_font("system CJK", font);
                 }
             }
+            // the system's fonts: SF for the interface, and every script the phone can show
+            #[cfg(target_os = "ios")]
+            ios_fonts::install();
             #[cfg(target_os = "ios")]
             {
                 ios_scene::set_context(&_cc.egui_ctx);
@@ -611,7 +761,7 @@ pub fn run(mut options: eframe::NativeOptions, library_dir: std::path::PathBuf, 
             let fresh = || Session::new().with_fs().with_system_clock().with_models_in(&data_dir);
             let (mut s, problem) = lightcraft_ui_egui::panels::library_problem::open_or_problem(fresh, &library_dir, true);
             memory::configure(&mut s, &_cc.egui_ctx);
-            let mut app = LightcraftApp::new(s, services(export_dir));
+            let mut app = LightcraftApp::new(s, services(export_dir, &_cc.egui_ctx));
             app.library_problem = problem;
             // the settings saved last time (language, shortcuts, panels …)
             let (prefs, saved, warning) = lightcraft_ui_egui::prefs::UiPrefs::load(data_dir.join("ui.json"));

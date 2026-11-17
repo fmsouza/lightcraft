@@ -68,8 +68,90 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(key, (w, h)));
 }
 
+/// A phone's aspect choices, in the order its photo apps list them: (label, `crop.aspect`).
+const PHONE_ASPECTS: [(&str, &str); 10] = [
+    ("Original", "original"),
+    ("Free", "free"),
+    ("1 × 1", "1x1"),
+    ("4 × 5", "4x5"),
+    ("5 × 7", "5x7"),
+    ("2 × 3", "2x3"),
+    ("4 × 3", "4x3"),
+    ("16 × 9", "16x9"),
+    ("16 × 10", "16x10"),
+    ("8.5 × 11", "8.5x11"),
+];
+
+/// Crop on a phone, as its photo editors have it: the aspect as a row of chips (choosing one
+/// locks it, Free unlocks), the tools as round buttons, Straighten, the overlay, then Geometry.
+fn crop_phone(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, original: Option<f64>) {
+    let d = app.session.develop_of(id).unwrap_or_default();
+    padded(ui, |ui| {
+        let cur = aspect_label(app.crop_tool_aspect(), original);
+        let active = PHONE_ASPECTS.iter().position(|(l, _)| aspect_label_matches(&cur, l)).or_else(|| (cur == "Free").then_some(1));
+        if let Some(i) = crate::widgets::chip_row(ui, "cropAspect", &PHONE_ASPECTS, active) {
+            let _ = app.run("crop.aspect", json!({"aspect": PHONE_ASPECTS[i].1}));
+        }
+        ui.add_space(6.0);
+        let straighten = app.ui.tool == "straighten";
+        let tools = [
+            ("cropRotateLeft", crate::icons::Icon::Rotate, "Rotate", false),
+            ("cropFlipH", crate::icons::Icon::Flip, "Flip H", d.crop.flip_h),
+            ("cropFlipV", crate::icons::Icon::Flip, "Flip V", d.crop.flip_v),
+            ("cropSwapAspect", crate::icons::Icon::RotateDrag, "Swap", false),
+            ("straightenTool", crate::icons::Icon::Sliders, "Level", straighten),
+            ("straightenAuto", crate::icons::Icon::Target, "Auto", false),
+        ];
+        match crate::widgets::tool_buttons(ui, &tools) {
+            Some("cropRotateLeft") => drop(app.run("photo.rotateLeft", json!({}))),
+            Some("cropFlipH") => drop(app.run("photo.flipHorizontal", json!({}))),
+            Some("cropFlipV") => drop(app.run("photo.flipVertical", json!({}))),
+            Some("cropSwapAspect") => drop(app.run("crop.rotateAspect", json!({}))),
+            Some("straightenTool") => app.ui.tool = if straighten { String::new() } else { "straighten".into() },
+            Some("straightenAuto") => app.auto_straighten(ui.ctx()),
+            _ => {}
+        }
+    });
+    if let Some(spec) = lightcraft_develop::controls::find("crop.angle").copied() {
+        let out = slider(ui, &spec, d.crop.geometry.angle, true, Some("Straighten"));
+        crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| app.run("crop.straighten", json!({"angle": v})));
+    }
+    padded(ui, |ui| {
+        crate::panels::settings::heading(ui, &Tokens::get(ui.ctx()), "Overlay");
+        overlay_choice(app, ui);
+    });
+}
+
+/// Whether the aspect button's label `cur` is the phone chip `chip` ("4 × 5 / 8 × 10" is "4 × 5").
+fn aspect_label_matches(cur: &str, chip: &str) -> bool {
+    cur == chip || cur.split(" / ").next() == Some(chip)
+}
+
 pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
+    if crate::panels::settings::phone_list(ui) {
+        let original = app.session.catalog.photo(id).map(|p| {
+            let (w, h) = (p.width.max(1) as f64, p.height.max(1) as f64);
+            if d.orientation.swaps_axes() { h / w } else { w / h }
+        });
+        crop_phone(app, ui, id, original);
+        divider(ui);
+        header(ui, "Geometry");
+        geometry(app, ui, &d);
+        padded(ui, |ui| {
+            ui.add_space(8.0);
+            if crate::panels::settings::phone_button(
+                ui,
+                "cropReset",
+                crate::i18n::tr("Reset Crop"),
+                crate::panels::settings::PhoneButton::Tinted,
+                true,
+            ) {
+                let _ = app.run("crop.reset", json!({}));
+            }
+        });
+        return;
+    }
     header(ui, "Crop");
     padded(ui, |ui| {
         let original = app.session.catalog.photo(id).map(|p| {
@@ -185,31 +267,46 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
     padded(ui, |ui| {
         ui.label(crate::i18n::tr("Overlay"));
-        {
-            use crate::state::CropOverlay as O;
-            let opts = [
-                (O::Thirds, "Thirds", "thirds"),
-                (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden", "golden"),
-                (O::Diagonal, "Diagonal", "diagonal"),
-                (O::Triangle, "Triangle", "triangle"),
-                (O::Spiral, "Spiral", "spiral"),
-                (O::None, "None", "none"),
-            ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
-                app.ui.crop_overlay = opts[i].0;
-            }
-            if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
-                && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
-            {
-                let _ = app.run("view.cropOverlayOrientation", json!({}));
-            }
-        }
+        overlay_choice(app, ui);
     });
     divider(ui);
     header(ui, "Geometry");
+    geometry(app, ui, &d);
+}
+
+/// The crop overlay's choices (and Flip Overlay for the two that have a direction).
+fn overlay_choice(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    {
+        use crate::state::CropOverlay as O;
+        let opts = [
+            (O::Thirds, "Thirds", "thirds"),
+            (O::Grid, "Grid", "grid"),
+            (O::Golden, "Golden", "golden"),
+            (O::Diagonal, "Diagonal", "diagonal"),
+            (O::Triangle, "Triangle", "triangle"),
+            (O::Spiral, "Spiral", "spiral"),
+            (O::None, "None", "none"),
+        ];
+        let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
+        let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
+        let picked = if crate::panels::settings::phone_list(ui) {
+            crate::widgets::chip_row(ui, "cropOverlay", &items, active)
+        } else {
+            crate::widgets::segmented(ui, "cropOverlay", &items, active, 4)
+        };
+        if let Some(i) = picked {
+            app.ui.crop_overlay = opts[i].0;
+        }
+        if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
+            && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
+        {
+            let _ = app.run("view.cropOverlayOrientation", json!({}));
+        }
+    }
+}
+
+/// Geometry: Upright, Constrain Crop and the transform sliders.
+fn geometry(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &lightcraft_develop::DevelopSettings) {
     padded(ui, |ui| {
         ui.label(crate::i18n::tr("Upright"));
         {
@@ -261,12 +358,12 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(4.0);
         let mut c = d.geometry.constrain_crop;
-        if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
+        if crate::panels::settings::check(ui, "constrainCrop", &mut c, "Constrain Crop") {
             let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
         }
     });
     for spec in lightcraft_develop::controls::in_section(lightcraft_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
-        let v = lightcraft_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
+        let v = lightcraft_develop::controls::get(d, spec.id).unwrap_or(spec.default);
         let out = slider(ui, spec, v, true, None);
         crate::panels::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
     }
@@ -276,13 +373,22 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
     padded(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
-                if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() {
-                    app.ui.tool = tool.into();
-                }
+        const MODES: [(&str, &str); 4] = [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")];
+        if crate::panels::settings::phone_list(ui) {
+            // a phone: the system's segmented control (`button:removeMode-{tool}` as below)
+            let on = MODES.iter().position(|(_, k)| app.ui.tool == *k);
+            if let Some(i) = crate::widgets::segmented(ui, "removeMode", &MODES, on, 4) {
+                app.ui.tool = MODES[i].1.into();
             }
-        });
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                for (label, tool) in MODES {
+                    if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() {
+                        app.ui.tool = tool.into();
+                    }
+                }
+            });
+        }
         ui.add_space(8.0);
         ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
         ui.add_space(4.0);
@@ -366,7 +472,9 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // Visualize Spots (A): a black/white high-pass view that makes dust and specks stand out
     padded(ui, |ui| {
         let mut v = app.ui.visualize_spots;
-        if ui.checkbox(&mut v, crate::i18n::tr("Visualize Spots (A)")).changed() {
+        // (`check`: a phone's switch row, without the A key's hint)
+        let label = if crate::widgets::phone_ui(ui) { "Visualize Spots" } else { "Visualize Spots (A)" };
+        if crate::panels::settings::check(ui, "visualizeSpots", &mut v, label) {
             app.ui.visualize_spots = v;
         }
     });
@@ -422,13 +530,21 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Red Eye");
     padded(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (label, pet) in [("Red Eye", false), ("Pet Eye", true)] {
-                if text_button(ui, &format!("eyeMode-{}", if pet { "pet" } else { "red" }), label, app.ui.eye_pet == pet).clicked() {
-                    app.ui.eye_pet = pet;
-                }
+        if crate::panels::settings::phone_list(ui) {
+            // a phone: the system's segmented control (`button:eyeMode-red` / `-pet` as below)
+            let modes = [("Red Eye", "red"), ("Pet Eye", "pet")];
+            if let Some(i) = crate::widgets::segmented(ui, "eyeMode", &modes, Some(app.ui.eye_pet as usize), 2) {
+                app.ui.eye_pet = i == 1;
             }
-        });
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                for (label, pet) in [("Red Eye", false), ("Pet Eye", true)] {
+                    if text_button(ui, &format!("eyeMode-{}", if pet { "pet" } else { "red" }), label, app.ui.eye_pet == pet).clicked() {
+                        app.ui.eye_pet = pet;
+                    }
+                }
+            });
+        }
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(crate::i18n::tr("Drag over an eye on the photo; the pupil inside is found automatically."))

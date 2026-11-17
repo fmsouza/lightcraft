@@ -1,4 +1,4 @@
-use super::widgets::{choices, heading};
+use super::widgets::{check, choices, heading, tick_list};
 use super::{RichText, Tokens, register};
 
 /// Appearance Mode (`button:settingsAppearance-{0,1,2}`: Auto, Dark, Light) above the light and
@@ -6,6 +6,10 @@ use super::{RichText, Tokens, register};
 /// use is outlined. Applied on the next frame ([`LightcraftApp::sync_theme`]).
 pub(super) fn appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::AppSettings, system: Option<egui::Theme>) {
     use crate::state::{AppearanceMode as M, DarkTheme, LightTheme};
+    if super::widgets::phone_list(ui) {
+        phone_appearance(ui, t, s, system);
+        return;
+    }
     heading(ui, t, crate::i18n::tr("Appearance"));
     ui.label(RichText::new(crate::i18n::tr("Appearance Mode")).color(t.text_label));
     ui.horizontal_wrapped(|ui| {
@@ -222,6 +226,96 @@ fn theme_preview(ui: &mut egui::Ui, kind: crate::theme::ThemeKind, width: f32) {
         painter.rect_filled(thumb, 0.0, Color32::from_rgb(0x6f + 8 * i as u8, 0x80, 0x8f));
         if selected {
             crate::panels::grid::selection_ring(&painter, &p, thumb, lightcraft_engine::SelectionState::Active);
+        }
+    }
+}
+
+/// Appearance upright on a phone, as a phone's own display settings have it: Light and Dark side
+/// by side, each a phone showing the library in its theme with a tick under the one in use, then
+/// Automatic (follow the system), then each family's themes as a list.
+fn phone_appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::AppSettings, system: Option<egui::Theme>) {
+    use crate::state::{AppearanceMode as M, DarkTheme, LightTheme};
+    heading(ui, t, crate::i18n::tr("Appearance"));
+    let light_active = s.theme(system) == s.light_theme.kind();
+    let w = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(egui::vec2(w, 196.0), egui::Sense::hover());
+    for (i, (label, kind, light)) in [("Light", s.light_theme.kind(), true), ("Dark", s.dark_theme.kind(), false)].into_iter().enumerate() {
+        let x = row.left() + w * (0.25 + 0.5 * i as f32);
+        let cell = egui::Rect::from_center_size(egui::pos2(x, row.center().y), egui::vec2(w * 0.5, row.height()));
+        let resp = ui.interact(cell, egui::Id::unique(("appearance-phone", light)), egui::Sense::click());
+        let label = crate::i18n::tr(label);
+        let on = light_active == light;
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, label));
+        register(ui, if light { "button:appearanceLight" } else { "button:appearanceDark" }, cell);
+        let phone = egui::Rect::from_min_size(egui::pos2(x - 36.0, cell.top() + 4.0), egui::vec2(72.0, 140.0));
+        phone_preview(ui.painter(), phone, kind);
+        let p = ui.painter();
+        p.text(egui::pos2(x, phone.bottom() + 14.0), egui::Align2::CENTER_CENTER, label, t.font(15.0), t.text);
+        let dot = egui::pos2(x, phone.bottom() + 38.0);
+        if on {
+            p.circle_filled(dot, 11.0, t.accent);
+            crate::icons::paint(p, egui::Rect::from_center_size(dot, egui::vec2(14.0, 14.0)), crate::icons::Icon::Check, egui::Color32::WHITE);
+        } else {
+            p.circle_stroke(dot, 10.5, egui::Stroke::new(1.5, t.text_dim));
+        }
+        if resp.clicked() {
+            s.appearance_mode = if light { M::Light } else { M::Dark };
+        }
+    }
+    let mut auto = s.appearance_mode == M::Auto;
+    if check(ui, "settings.appearanceAuto", &mut auto, "Automatic") {
+        s.appearance_mode = if auto {
+            M::Auto
+        } else if light_active {
+            M::Light
+        } else {
+            M::Dark
+        };
+    }
+    super::widgets::hint(ui, t, crate::i18n::tr("Light or dark as the system is set."));
+    let swatch = |k: crate::theme::ThemeKind| {
+        let p = Tokens::for_kind(k);
+        Some((p.chrome, p.accent))
+    };
+    heading(ui, t, crate::i18n::tr("Light Theme"));
+    let light: Vec<_> = LightTheme::ALL.iter().map(|l| (*l, l.kind().label())).collect();
+    tick_list(ui, "themeLight", &light, &mut s.light_theme, |l| swatch(l.kind()));
+    heading(ui, t, crate::i18n::tr("Dark Theme"));
+    let dark: Vec<_> = DarkTheme::ALL.iter().map(|d| (*d, d.kind().label())).collect();
+    tick_list(ui, "themeDark", &dark, &mut s.dark_theme, |d| swatch(d.kind()));
+}
+
+/// A phone showing the library in `kind`'s colours: the status bar, the album row, a month
+/// heading and a grid of photos (their own colours: a photo looks the same in every theme).
+fn phone_preview(painter: &egui::Painter, rect: egui::Rect, kind: crate::theme::ThemeKind) {
+    use egui::{Color32, Rect, Stroke, StrokeKind, pos2, vec2};
+    let p = Tokens::for_kind(kind);
+    painter.rect_filled(rect, 12.0, p.canvas);
+    painter.rect_stroke(rect, 12.0, Stroke::new(2.0, p.divider), StrokeKind::Outside);
+    let inner = rect.shrink(4.0);
+    // the island, then the bar with the album name and its buttons
+    painter.rect_filled(Rect::from_center_size(pos2(inner.center().x, inner.top() + 6.0), vec2(18.0, 5.0)), 2.5, Color32::BLACK);
+    let bar = Rect::from_min_size(pos2(inner.left(), inner.top() + 12.0), vec2(inner.width(), 14.0));
+    painter.rect_filled(bar, 0.0, p.chrome);
+    painter.rect_filled(Rect::from_min_size(bar.min + vec2(4.0, 5.0), vec2(22.0, 4.0)), 1.0, p.text);
+    for i in 0..3 {
+        painter.circle_filled(pos2(bar.right() - 5.0 - i as f32 * 8.0, bar.center().y), 2.0, p.icon);
+    }
+    // a month heading over three columns of photos
+    painter.rect_filled(Rect::from_min_size(pos2(inner.left() + 3.0, bar.bottom() + 5.0), vec2(20.0, 3.0)), 1.0, p.text_dim);
+    let photos = [(0x6f, 0x8f, 0xb4), (0xb4, 0x8a, 0x5c), (0x5e, 0x7d, 0x5a), (0x8e, 0x6a, 0x8f), (0xc2, 0xa0, 0x6e), (0x4f, 0x63, 0x7a)];
+    let cell = (inner.width() - 2.0) / 3.0;
+    let top = bar.bottom() + 11.0;
+    let mut n = 0;
+    'grid: for row in 0.. {
+        for col in 0..3 {
+            let r = Rect::from_min_size(pos2(inner.left() + col as f32 * (cell + 1.0), top + row as f32 * (cell + 1.0)), vec2(cell, cell));
+            if r.bottom() > inner.bottom() - 2.0 {
+                break 'grid;
+            }
+            let (red, green, blue) = photos[n % photos.len()];
+            painter.rect_filled(r, 0.0, Color32::from_rgb(red, green, blue));
+            n += 1;
         }
     }
 }

@@ -15,6 +15,11 @@ use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(60);
 const PHOTOS: u64 = 40;
+/// How long the slow share holds its answers at most when a test never opens it: only a regression
+/// (the files looked at on the UI thread, a stop that isn't one) reaches it. Long enough that a
+/// loaded machine running the whole suite doesn't reach it before a test opens the share or stops
+/// the check.
+const GUARD: Duration = Duration::from_secs(20);
 
 /// Photos `IMG_0000` … on a share; the first ten are gone. The existence check waits for `open`
 /// (a share that answers slowly), at most `guard`, and counts its calls, and those made on the UI thread.
@@ -65,13 +70,19 @@ fn answer(h: &mut Headless, rx: &Receiver<Value>) -> Value {
     }
 }
 
+/// Frames until the check shows its row in the activity stack: it starts on a worker thread, which
+/// on a loaded machine (the whole suite running) can take more than a few frames.
+fn started(h: &mut Headless) {
+    assert!(h.step_until(T, |h| !missing_rows(h).is_empty()), "the check started (its row)");
+}
+
 fn missing_rows(h: &Headless) -> Vec<lightcraft_engine::activity::TaskInfo> {
     h.app.session.activity.list().into_iter().filter(|r| r.kind == "missing").collect()
 }
 
 #[test]
 fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     let t0 = Instant::now();
     let rx = ask(&mut h);
     for _ in 0..3 {
@@ -80,6 +91,7 @@ fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
     // the share is still answering nothing: the window took its frames all the same
     assert!(t0.elapsed() < Duration::from_secs(2), "the frames waited for the files: {:?}", t0.elapsed());
     assert!(rx.try_recv().is_err(), "no answer before the files are checked");
+    started(&mut h);
     let rows = missing_rows(&h);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].cancellable, "the row can stop the check");
@@ -99,11 +111,9 @@ fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
 /// A request that comes while a check runs gets that check's answer: the share isn't walked twice.
 #[test]
 fn a_second_request_joins_the_check_that_is_running() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     let (first, second) = (ask(&mut h), ask(&mut h));
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     assert_eq!(missing_rows(&h).len(), 1, "one check for both");
     share.open.store(true, Ordering::SeqCst);
     let (a, b) = (answer(&mut h, &first), answer(&mut h, &second));
@@ -115,11 +125,9 @@ fn a_second_request_joins_the_check_that_is_running() {
 /// ✕ on the row (or `activity.cancel`) stops the check; the request is told so.
 #[test]
 fn stopping_the_check_answers_the_request_with_an_error() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     let rx = ask(&mut h);
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     let id = missing_rows(&h)[0].id;
     let r = h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -135,11 +143,9 @@ fn stopping_the_check_answers_the_request_with_an_error() {
 /// again after its timeout and is given the answer the check ended with, not another walk.
 #[test]
 fn an_answer_nobody_waited_for_is_given_to_the_next_request() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     let gave_up = ask(&mut h);
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     drop(gave_up);
     share.open.store(true, Ordering::SeqCst);
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()), "the check ends without a caller");
@@ -159,7 +165,7 @@ fn an_answer_nobody_waited_for_is_given_to_the_next_request() {
 /// A check that panics is a failure told to the caller, not a request left waiting for its timeout.
 #[test]
 fn a_check_that_panics_is_answered_with_an_error() {
-    let (mut h, _share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, _share) = app_on_a_slow_share(GUARD);
     h.app.session.media.availability.set_probe(Arc::new(|_| panic!("a file system that panics")));
     let rx = ask(&mut h);
     let reply = answer(&mut h, &rx);
@@ -182,11 +188,9 @@ fn new_photo(id: u64, path: &str) -> Box<Photo> {
 /// Deleted or relinked since is not reported; one added since was not checked and is not either.
 #[test]
 fn a_check_over_changing_photos_answers_what_still_holds() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     let rx = ask(&mut h);
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     let cat = &mut h.app.session.catalog;
     cat.apply(Op::RemovePhoto { id: PhotoId(1) }).unwrap();
     cat.apply(Op::SetDeleted { id: PhotoId(2), deleted: true }).unwrap();
@@ -204,11 +208,9 @@ fn a_check_over_changing_photos_answers_what_still_holds() {
 /// A stop is a stop, whatever the photos did meanwhile.
 #[test]
 fn a_stopped_check_says_stopped_even_if_the_photos_changed() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     let rx = ask(&mut h);
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     h.app.session.catalog.apply(Op::AddPhoto { photo: new_photo(PHOTOS + 1, "/share/IMG_9999.jpg") }).unwrap();
     let id = missing_rows(&h)[0].id;
     let r = h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T);
@@ -222,11 +224,9 @@ fn a_stopped_check_says_stopped_even_if_the_photos_changed() {
 /// checks afresh (and then sees the photo that came meanwhile).
 #[test]
 fn a_check_over_changed_photos_is_not_kept_for_a_later_request() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     drop(ask(&mut h));
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     h.app.session.catalog.apply(Op::AddPhoto { photo: new_photo(PHOTOS + 1, "/share/IMG_0000x.jpg") }).unwrap();
     share.open.store(true, Ordering::SeqCst);
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
@@ -240,11 +240,9 @@ fn a_check_over_changed_photos_is_not_kept_for_a_later_request() {
 /// An edit that leaves the photos' files alone (a rating) does not spoil the check.
 #[test]
 fn an_edit_that_leaves_the_files_alone_does_not_spoil_the_check() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     let rx = ask(&mut h);
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     h.app.session.catalog.apply(Op::SetRating { id: PhotoId(1), rating: 3 }).unwrap();
     share.open.store(true, Ordering::SeqCst);
     assert_eq!(answer(&mut h, &rx)["ok"], true);
@@ -267,11 +265,9 @@ fn a_failed_start_fails_only_that_librarys_requests() {
 /// An answer kept for a request that never came is not given once the photos have changed.
 #[test]
 fn a_kept_answer_is_not_given_after_the_photos_changed() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(GUARD);
     drop(ask(&mut h));
-    for _ in 0..3 {
-        h.step();
-    }
+    started(&mut h);
     share.open.store(true, Ordering::SeqCst);
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
     let p =

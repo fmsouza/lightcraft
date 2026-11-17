@@ -80,6 +80,11 @@ const NAME_H: f32 = 20.0;
 /// The buttons' row at the bottom of the options (or of both tabs).
 const FOOTER_H: f32 = 34.0;
 
+/// The footer's height in this ui: room for finger-sized buttons where the controls are (a phone).
+fn footer_h(ui: &egui::Ui) -> f32 {
+    if crate::widgets::finger_ui(ui) { 50.0 } else { FOOTER_H }
+}
+
 pub(crate) fn layout(width: f32) -> Layout {
     if width >= SIDE_MIN_WIDTH { Layout::Side } else { Layout::Tabs }
 }
@@ -96,7 +101,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) ->
     let full = ui.available_rect_before_wrap();
     // (a window that is still sizing itself reports no height: one of the screen's)
     let height = if full.height().is_finite() && full.height() > 1.0 { full.height() } else { window_size(ui.ctx().content_rect().size()).y - 80.0 };
-    let full = Rect::from_min_size(full.min, vec2(full.width(), height.max(CELL + NAME_H + FOOTER_H)));
+    let full = Rect::from_min_size(full.min, vec2(full.width(), height.max(CELL + NAME_H + footer_h(ui))));
     ui.allocate_rect(full, Sense::hover());
     let mut pressed = None;
     let child = |ui: &mut egui::Ui, r: Rect, add: &mut dyn FnMut(&mut egui::Ui)| {
@@ -144,8 +149,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) ->
                     options_column(app, ui, d, r);
                 } else {
                     header(ui, d);
-                    thumb_size_slider(app, ui);
-                    grid(app, ui, d, FOOTER_H + 8.0);
+                    // (a phone's columns fill the width already: the photos get the slider's room)
+                    if !crate::widgets::finger_ui(ui) {
+                        thumb_size_slider(app, ui);
+                    }
+                    grid(app, ui, d, footer_h(ui) + 8.0);
                 }
                 pressed = footer(ui, d);
             });
@@ -161,7 +169,7 @@ fn header(ui: &mut egui::Ui, d: &mut ImportDialog) {
     let n = d.candidates.len();
     let (dups, in_source, trashed) = dup_counts(d);
     let sel = d.selected_paths().len();
-    ui.horizontal(|ui| {
+    let counts = |ui: &mut egui::Ui| {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} found · {sel} selected", n = n, sel = sel)).color(t.text));
         if dups > 0 {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {dups} already in the library", dups = dups)).color(t.text_dim));
@@ -173,17 +181,27 @@ fn header(ui: &mut egui::Ui, d: &mut ImportDialog) {
         if trashed > 0 {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {trashed} in Recently Deleted", trashed = trashed)).color(t.text_dim));
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::text_button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
-                d.checked.iter_mut().for_each(|c| *c = false);
+    };
+    let buttons = |ui: &mut egui::Ui, d: &mut ImportDialog| {
+        if crate::widgets::text_button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
+            d.checked.iter_mut().for_each(|c| *c = false);
+        }
+        if crate::widgets::text_button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
+            for i in 0..n {
+                d.checked[i] = d.checked_by_default(i);
             }
-            if crate::widgets::text_button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
-                for i in 0..n {
-                    d.checked[i] = d.checked_by_default(i);
-                }
-            }
+        }
+    };
+    if crate::widgets::finger_ui(ui) {
+        // a phone: the counts on a line of their own, the finger-sized buttons under them
+        ui.horizontal_wrapped(counts);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| buttons(ui, d));
+    } else {
+        ui.horizontal(|ui| {
+            counts(ui);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| buttons(ui, d));
         });
-    });
+    }
     // with more than one file type: a toggle per type checks or unchecks all of its files
     let types = d.file_types();
     if types.len() > 1 {
@@ -208,6 +226,8 @@ fn grid(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, below:
     // the size picked with the slider, as many columns as fit
     let cell = thumb_size(app.ui.import_thumb_size).min(avail.max(1.0));
     let cols = ((avail + CELL_GAP) / (cell + CELL_GAP)).floor().max(1.0) as usize;
+    // a phone's columns share the whole width (no empty strip at the right of the grid)
+    let cell = if crate::widgets::finger_ui(ui) { ((avail - CELL_GAP * (cols as f32 - 1.0)) / cols as f32).floor().max(cell) } else { cell };
     let rows = n.div_ceil(cols);
     let h = (ui.available_height() - below).floor().max(CELL + NAME_H);
     let mut visible = std::collections::HashSet::new();
@@ -236,7 +256,7 @@ fn grid(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, below:
 
 /// The options, scrolling within `column` above the buttons.
 fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, column: Rect) {
-    let h = (column.bottom() - ui.cursor().top() - FOOTER_H - 8.0).floor().max(40.0);
+    let h = (column.bottom() - ui.cursor().top() - footer_h(ui) - 8.0).floor().max(40.0);
     let r = egui::ScrollArea::vertical().id_salt("import-options").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 8.0;
         options(app, ui, d);
@@ -247,7 +267,7 @@ fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
 /// Cancel and Import (or Move) at the bottom right.
 fn footer(ui: &mut egui::Ui, d: &ImportDialog) -> Option<Footer> {
     let mut pressed = None;
-    let top = (ui.max_rect().bottom() - FOOTER_H).max(ui.cursor().top());
+    let top = (ui.max_rect().bottom() - footer_h(ui)).max(ui.cursor().top());
     let r = Rect::from_min_max(pos2(ui.max_rect().left(), top), ui.max_rect().max);
     ui.scope_builder(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
         use crate::button::{Button, Kind};

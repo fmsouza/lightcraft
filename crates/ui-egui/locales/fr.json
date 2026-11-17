@@ -3592,5 +3592,8 @@
   "Top bar": "Barre supérieure",
   "Tool strip": "Barre d’outils",
   "Bottom bar": "Barre inférieure",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Empêcher le scintillement G-SYNC/FreeSync (au prochain démarrage)",
+  "Touch": "Toucher",
+  "Show touches": "Afficher les touchers",
+  "A dot where a finger is and a ring where it lifted, for screen recordings.": "Un point là où se trouve le doigt et un cercle là où il s’est levé, pour les enregistrements d’écran."
 }

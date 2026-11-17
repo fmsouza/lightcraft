@@ -76,7 +76,7 @@ const MAX_FOLLOWED: usize = 4096;
 pub struct GridCache {
     runs: Option<(RunsKey, Arc<Vec<DateRun>>)>,
     /// Layout by (runs key, width, thumbnail size, square).
-    layout: Option<((RunsKey, u32, u32, bool), Arc<GridLayout>)>,
+    layout: Option<((RunsKey, u32, u32, bool, bool), Arc<GridLayout>)>,
     /// Stack index by generation.
     stacks: Option<(u64, Arc<StackIndex>)>,
     /// How many of the photos are browsed (Local) ones, by generation.
@@ -309,12 +309,19 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.painter().rect_filled(hr, 0.0, t.canvas);
             let full = crate::i18n::source_title(&app.session);
             let count_w = ui.painter().layout_no_wrap(cnt.clone(), t.font(12.5), t.text_dim).size().x;
+            // a phone puts Filter and Sort at the row's right end, after the count
+            let tools_w = if super::compact::is_compact(ui.ctx()) { super::compact::ALBUM_TOOLS_W } else { 0.0 };
+            let right = if tools_w > 0.0 { hr.right() - tools_w - 10.0 } else { hr.right() - 20.0 };
             // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+            let room = (right - hr.left() - 20.0 - count_w - 16.0).max(0.0);
             let font = t.semibold(17.0);
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
-            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
+            let count_rect = ui.painter().text(pos2(right, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
+            if tools_w > 0.0 {
+                let tools = Rect::from_min_max(pos2(hr.right() - tools_w - 4.0, hr.top()), pos2(hr.right() - 4.0, hr.bottom()));
+                super::compact::album_tools(app, ui, tools);
+            }
             crate::widgets::register(ui, "grid:title", title_rect);
             crate::widgets::register(ui, "grid:count", count_rect);
             if title != full {
@@ -323,7 +330,8 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     super::chips::show(app, ui, &chips);
-    if app.ui.filter_bar {
+    // (a phone has the Filter sheet instead)
+    if app.ui.filter_bar && !super::compact::is_compact(ui.ctx()) {
         super::filterbar::show(app, ui);
     }
     app.canvas_rect = Some(ui.max_rect());
@@ -382,7 +390,10 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let runs = app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key, square);
     // the layout only changes with the photos (and their shapes), the grouping, the width and
     // the thumbnail size
-    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square);
+    // a phone stretches a date group's last row across the screen (up to [`PHONE_STRETCH`] times
+    // the row height), so a month doesn't end in a half-empty row
+    let stretch = if compact { PHONE_STRETCH } else { 1.0 };
+    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square, compact);
     let lay = match &app.caches.grid.layout {
         Some((k, l)) if *k == lay_key => l.clone(),
         _ => {
@@ -395,7 +406,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 app.caches.grid.shapes()
             };
             let spans: Vec<(usize, usize)> = runs.iter().map(|r| (r.start, r.count)).collect();
-            let l = Arc::new(layout(shapes, &spans, avail_w, target, square));
+            let l = Arc::new(layout_stretched(shapes, &spans, avail_w, target, square, stretch));
             app.caches.grid.layout = Some((lay_key, l.clone()));
             l
         }
@@ -614,6 +625,16 @@ pub fn resolve_group(by: GroupBy, thumb_size: f32) -> GroupBy {
 /// below its header. Justified rows fill the width exactly except a group's last row, which keeps
 /// the target height.
 pub fn layout(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: f32, square: bool) -> GridLayout {
+    layout_stretched(aspects, groups, avail_w, target, square, 1.0)
+}
+
+/// How much taller than the others a date group's last row may grow on a phone to fill the width.
+/// A month of one or two photos that would need more keeps its short row instead of one huge photo.
+pub const PHONE_STRETCH: f32 = 1.8;
+
+/// [`layout`], but a group's last justified row also fills the width when that makes it at most
+/// `max_stretch` times the target height (1: only when it would be shorter, as [`layout`]).
+pub fn layout_stretched(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: f32, square: bool, max_stretch: f32) -> GridLayout {
     let n = aspects.len();
     let whole = [(0, n)];
     let (groups, headed) = if groups.is_empty() { (&whole[..], false) } else { (groups, true) };
@@ -659,7 +680,7 @@ pub fn layout(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: 
                     }
                 }
                 let row_h = (avail_w - gap * (j - i - 1) as f32) / sum;
-                let h = if j < end || row_h <= target { row_h } else { target };
+                let h = if j < end || row_h <= target * max_stretch { row_h } else { target };
                 let mut x = 4.0;
                 for k in i..j {
                     let w = aspects[k].max(0.05) * h;
@@ -1079,6 +1100,8 @@ fn touch_cell(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) -> bo
     // the release that ends a long press is not a click (egui drops the potential click once the
     // touch is long), so it needs no guard
     if resp.long_touched() {
+        // (a knock: the photo under the finger is selected, which the finger hides)
+        haptic(app, crate::Haptic::Press);
         if !app.ui.select_mode {
             let _ = app.run("view.selectMode", json!({"on": true}));
             let _ = app.run("library.select", json!({"ids": [id.0], "mode": "replace"}));
@@ -1205,14 +1228,26 @@ fn slide_select(app: &mut LightcraftApp, ui: &egui::Ui, ids: &[PhotoId], cells: 
             if let Some(i) = index_at(pos)
                 && s.last != Some(i)
             {
+                let before = app.session.selection.ids.len();
                 select_range(app, ids, &s, i);
                 s.last = Some(i);
+                // a tick for each photo that went in or out under the finger
+                if app.session.selection.ids.len() != before {
+                    haptic(app, crate::Haptic::Tick);
+                }
             }
             Slide::Selecting(s)
         }
         other => other,
     };
     ctx.data_mut(|d| d.insert_temp(slide_id(), slide));
+}
+
+/// The host's haptics, if it has any.
+fn haptic(app: &mut LightcraftApp, kind: crate::Haptic) {
+    if let Some(h) = app.services.haptic.as_mut() {
+        h(kind);
+    }
 }
 
 /// The cell under `p` (in the grid's content). Cells are in reading order, so their bottoms only
@@ -1548,8 +1583,12 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
         let _ = app.run("view.selectMode", json!({"on": true}));
     }
     // Photo ▸ Edit In: a copy with this photo's edits, opened in PhotoCraft or another editor
-    // (desktop only: the web can't start programs)
+    // (desktop only: the web can't start programs, a phone has no other editors to start)
+    let mobile = app.services.mobile;
     ui.add_enabled_ui(crate::menus::ui_enabled(app, "photo.editInPhotoCraft"), |ui| {
+        if mobile {
+            return;
+        }
         crate::widgets::menu_button(ui, crate::i18n::tr("Edit In"), |ui| {
             if ui.button(crate::i18n::tr("Edit in PhotoCraft")).clicked() {
                 let _ = app.run("photo.editInPhotoCraft", json!({}));
@@ -1581,6 +1620,11 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
             }
             Err(e) => app.toast(ui.ctx(), e),
         }
+    }
+    // (the Reference View it is for is a desktop's, beside the photo being edited)
+    if mobile {
+        ui.separator();
+        return;
     }
     let live = super::compare::live(app, id);
     let set_reference = ui
@@ -1696,7 +1740,8 @@ fn context_menu_file_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if can_move_to_folder(app) && ui.button(crate::i18n::tr("Move to Folder…")).clicked() {
         move_to_folder(app, ui.ctx());
     }
-    if ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
+    // (a phone's photos live in the app's own storage, where nothing else changes them)
+    if !app.services.mobile && ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
         // the files are read in the background (activity row `reload`)
         if let Err(e) = app.run("photo.reload", json!({})) {
             app.toast_error(ui.ctx(), e);
@@ -1848,6 +1893,22 @@ mod tests {
         let last = l.cells.last().unwrap();
         assert!(last.right() <= 604.0 + 0.5);
         assert!((l.height - (last.bottom() + 6.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn stretched_layout_fills_a_groups_last_row_within_reason() {
+        // group 1: five photos (a row of three, then two), group 2: one photo
+        let aspects = [1.5, 1.5, 1.5, 1.5, 1.5, 0.7];
+        let groups = [(0, 5), (5, 1)];
+        let plain = layout(&aspects, &groups, 400.0, 100.0, false);
+        let l = layout_stretched(&aspects, &groups, 400.0, 100.0, false, 1.8);
+        assert!(plain.cells[4].right() < 320.0, "plain: the last row stops short: {:?}", plain.cells[4]);
+        assert!((l.cells[4].right() - 404.0).abs() < 0.5, "stretched: it spans the width: {:?}", l.cells[4]);
+        assert!(l.cells[4].height() <= 180.0);
+        assert_eq!(l.headers.len(), 2, "the headers stay rows of their own");
+        assert!(l.cells[5].top() >= l.headers[1].bottom(), "group 2 below its header");
+        // a lone portrait photo would be ~570 pt tall across 400 pt: it keeps the target height
+        assert!((l.cells[5].height() - 100.0).abs() < 0.01, "{:?}", l.cells[5]);
     }
 
     #[test]

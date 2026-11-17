@@ -28,8 +28,8 @@ use grading::grading;
 pub(crate) use grading::wheel_pointer_frame_end;
 #[cfg(test)]
 pub(crate) use grading::{WheelGrab, WheelLock, WheelMods, wheel_pick};
-pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
+pub(crate) use histogram::{histogram, photo_overlay as histogram_overlay};
 use mixer::{mixer, point_color};
 use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
@@ -129,9 +129,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.session.source_info(id).local_tone.is_some() {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
             let mut on = d.profile.camera_local_tone;
-            let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
-            crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
-            if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
+            let changed = if crate::widgets::finger_ui(ui) {
+                // a phone's switch row
+                crate::panels::settings::check(ui, "profile.cameraLocalTone", &mut on, "Camera local tone mapping")
+            } else {
+                let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
+                crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
+                r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed()
+            };
+            if changed {
                 let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
         });
@@ -353,18 +359,26 @@ fn effects_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettin
     ui.add_space(8.0);
 }
 
-fn detail_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
-    for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
-        control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
-    }
-    // AI Denoise is its own tool, apart from the manual noise reduction sliders below it
+/// AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that
+/// picture is doing.
+fn ai_denoise(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
     sub_title(ui, crate::i18n::tr("AI Denoise"));
-    // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
     let applicable = !matches!(app.session.denoise_photo_state(id), lightcraft_engine::denoise::PhotoState::NotApplicable);
     let on = d.enhance.denoise_enabled();
     super::denoise::detail_toggle(app, ui, id, on, applicable);
     control(app, ui, d, "enhance.denoise", applicable && on);
     super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
+}
+
+fn detail_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
+    for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
+        control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
+    }
+    // AI Denoise is its own tool, apart from the manual noise reduction sliders below it (not on a
+    // phone or tablet: no model is offered there, and a raw would take minutes on its processor)
+    if !app.services.mobile {
+        ai_denoise(app, ui, d, id);
+    }
     sub_title(ui, crate::i18n::tr("Noise Reduction"));
     for c in ["detail.nrLuminance", "detail.nrDetail", "detail.nrContrast", "detail.nrColor", "detail.nrColorDetail", "detail.nrColorSmoothness"] {
         control(app, ui, d, c, true);
@@ -375,12 +389,13 @@ fn detail_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetting
 fn optics_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, _raw: bool) {
     let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
+        // (`check`: a phone's switch row, a check box elsewhere)
         let mut ca = d.optics.remove_ca;
-        if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
+        if crate::panels::settings::check(ui, "optics.removeCa", &mut ca, "Remove Chromatic Aberration") {
             let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
         }
         let mut lp = d.optics.lens_profile;
-        if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
+        if crate::panels::settings::check(ui, "optics.lensProfile", &mut lp, "Enable Lens Corrections") {
             let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
         }
         if lp && !has_lens {

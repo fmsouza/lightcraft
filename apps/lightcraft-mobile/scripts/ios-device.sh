@@ -9,7 +9,8 @@
 #   IOS_TEAM_ID        the team id (the profile's TeamIdentifier)
 #   IOS_BUNDLE_ID      optional, default ai.storyteller.lightcraft.mobile (the profile must allow it)
 #
-# PROFILE=debug for a debug build (release by default: debug is slow on a phone).
+# PROFILE=debug for a debug build, release to keep symbols (mobile by default: optimized and
+# stripped; debug is slow on a phone).
 set -eu
 cd "$(dirname "$0")/../../.."
 : "${IOS_SIGN_IDENTITY:?set IOS_SIGN_IDENTITY}" "${IOS_PROFILE:?set IOS_PROFILE}" "${IOS_TEAM_ID:?set IOS_TEAM_ID}"
@@ -17,8 +18,8 @@ BUNDLE_ID=${IOS_BUNDLE_ID:-ai.storyteller.lightcraft.mobile}
 [ $# -gt 0 ] || { echo "usage: $0 DEVICE_UDID..." >&2; exit 2; }
 CARGO=${CARGO:-cargo}
 TARGET=aarch64-apple-ios
-PROFILE=${PROFILE:-release}
-[ "$PROFILE" = release ] && FLAG=--release || FLAG=
+PROFILE=${PROFILE:-mobile}
+[ "$PROFILE" = debug ] && FLAG= || FLAG="--profile $PROFILE"
 $CARGO build $FLAG -p lightcraft-mobile --bin lightcraft-ios --target $TARGET
 OUT=${CARGO_TARGET_DIR:-target}/$TARGET/$PROFILE
 APP=$OUT/LightCraft.app

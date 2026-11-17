@@ -112,6 +112,24 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         set_section(ui.ctx(), None);
     }
     let detail = app.ui.view == ViewMode::Detail;
+    // a tap on the photo hid the editor's bars and sheet: the photo takes the screen, but for
+    // Crop's, which stays where it is under a cover (`cover_chrome`)
+    if !detail || app.session.active().is_none() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(chrome_hidden_id()));
+    }
+    let hidden = detail && chrome_hidden(ui.ctx());
+    let cover = hidden && app.ui.right == RightPanel::Crop;
+    // they go at once and come back fading in, as the photo glides between its rooms
+    let shown = ui.ctx().animate_bool_with_time(egui::Id::unique("compact-chrome-shown"), !hidden, 0.2);
+    if hidden && !cover {
+        sideways_photo(app, ui);
+        return;
+    }
+    // (only the chrome: the caller draws the photo into this same `ui` afterwards)
+    let opacity = ui.opacity();
+    if !hidden && shown < 1.0 {
+        ui.multiply_opacity(shown);
+    }
     if detail {
         editor_bar(app, ui);
     } else {
@@ -140,6 +158,136 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // (in landscape the editor's sheet is part of the tool column, drawn by `tool_dock`)
         sheet(app, ui);
     }
+    super::share_sheet::show(app, ui.ctx());
+    super::filter_sheet::show(app, ui.ctx());
+    super::more_sheet::show(app, ui.ctx());
+    super::sort_sheet::show(app, ui.ctx());
+    super::rate_sheet::show(app, ui.ctx());
+    if cover {
+        cover_chrome(ui.ctx(), ui.available_rect_before_wrap());
+    }
+    sideways_photo(app, ui.ctx());
+    ui.set_opacity(opacity);
+}
+
+/// Whether the phone editor shows its photo alone, turned to fill the screen: the phone is held
+/// sideways (its interface stays upright: [`LightcraftApp::device_turn`]) on a photo, as phone
+/// photo editors do: its bars and a tool's sheet make way (turned back, they are as they were);
+/// a dialog or a sheet of choices (Share, Rate, More) stays upright to be answered.
+pub fn sideways(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    app.device_turn != 0
+        && app.ui.view == ViewMode::Detail
+        && app.session.active().is_some()
+        && app.ui.dialog.is_none()
+        && !super::share_sheet::is_open(ctx)
+        && !super::rate_sheet::is_open(ctx)
+        && !super::more_sheet::is_open(ctx)
+}
+
+/// The photo alone on black, turned a quarter towards the way the phone is held so it fills the
+/// screen ([`sideways`]); a swipe along it goes to the next or previous photo, as upright
+/// ([`super::detail::swipe`]). The editor goes on underneath (its renders keep coming); this
+/// covers it and takes the touches.
+fn sideways_photo(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let want = sideways(app, ctx);
+    let Some((shown, turn)) = turning(ctx, want, app.device_turn.signum()) else { return };
+    let Some(id) = app.session.active() else { return };
+    let screen = ctx.viewport_rect();
+    let room = ctx.content_rect();
+    // turned a quarter, the photo's width runs down the screen
+    let pitch = room.height() + super::detail::swipe::GAP;
+    let [previous, next] = super::detail::neighbours(app);
+    // where the turn starts from: the photo where the editor has it
+    let from = app.image_rect;
+    egui::Area::new(egui::Id::unique("compact-sideways")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+        let (_, resp) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
+        let mut step = None;
+        if want {
+            let track = super::detail::swipe::Track { axis: along_turned, turn, pitch, has_previous: previous.is_some(), has_next: next.is_some() };
+            step = super::detail::swipe::track(ui, &resp, &track).0;
+        }
+        let offset = if want { super::detail::swipe::offset(ctx) } else { 0.0 };
+        ui.painter().rect_filled(screen, 0.0, egui::Color32::BLACK.gamma_multiply(shown));
+        // top to the left: the photo's top faces the screen's right (a clockwise quarter)
+        let angle = f32::from(turn) * std::f32::consts::FRAC_PI_2 * shown;
+        // (the neighbours only once it has turned: mid-turn the photo is alone)
+        let neighbours = if shown >= 1.0 { [(previous, offset - pitch), (next, offset + pitch)] } else { [(None, 0.0); 2] };
+        for (photo, at) in [(Some(id), offset)].into_iter().chain(neighbours) {
+            let Some(tex) = photo.and_then(|p| super::detail::photo_texture(app, p)) else { continue };
+            let [w, h] = tex.size.map(|v| v.max(1) as f32);
+            let scale = (room.height() / w).min(room.width() / h);
+            // along the photo's width is down the screen for a clockwise turn, up for the other
+            let centre = room.center() + vec2(0.0, at * f32::from(turn));
+            let mut upright = Rect::from_center_size(centre, vec2(w * scale, h * scale));
+            if photo == Some(id)
+                && shown < 1.0
+                && let Some(from) = from.filter(|r| r.is_positive())
+            {
+                // on its way: from the editor's place and size to the turned one's
+                let start = from.width() / w;
+                let s = egui::lerp(start..=scale, shown);
+                upright = Rect::from_center_size(from.center().lerp(centre, shown), vec2(w * s, h * s));
+            }
+            if !upright.expand(w.max(h) * scale).intersects(screen) {
+                continue;
+            }
+            egui::Image::from_texture(egui::load::SizedTexture::new(tex.tex.id(), upright.size()))
+                .rotate(angle, egui::Vec2::splat(0.5))
+                .paint_at(ui, upright);
+            if photo == Some(id) && want {
+                register(ui, "photo:sideways", Rect::from_center_size(upright.center(), vec2(upright.height(), upright.width())));
+            }
+        }
+        super::detail::step_to(app, step);
+    });
+}
+
+/// How long the photo takes to turn a quarter (s), about UIKit's rotation.
+const TURN_SECS: f32 = 0.4;
+
+/// How far the photo has turned towards the sideways view (0 upright where the editor has it, 1
+/// turned), eased as UIKit turns its interface, and which way: `None` once it is upright again.
+/// A change of mind halfway turns it back from where it is.
+fn turning(ctx: &egui::Context, want: bool, turn: i8) -> Option<(f32, i8)> {
+    #[derive(Clone, Copy)]
+    struct Turn {
+        /// Linear progress when this leg started, and towards 0 or 1.
+        from: f32,
+        to: f32,
+        start: f64,
+        turn: i8,
+    }
+    let id = egui::Id::unique("compact-turning");
+    let now = ctx.input(|i| i.time);
+    let at = |t: &Turn| {
+        let span = (t.to - t.from).abs() * TURN_SECS;
+        if span <= 0.0 { t.to } else { egui::lerp(t.from..=t.to, ((now - t.start) as f32 / span).clamp(0.0, 1.0)) }
+    };
+    let mut t = ctx.data(|d| d.get_temp::<Turn>(id)).unwrap_or(Turn { from: 0.0, to: 0.0, start: now, turn });
+    let to = if want { 1.0 } else { 0.0 };
+    // held the other way round: from upright again, towards the new side
+    if want && turn != t.turn {
+        t = Turn { from: 0.0, to, start: now, turn };
+    } else if t.to != to {
+        t = Turn { from: at(&t), to, start: now, turn: t.turn };
+    }
+    let p = at(&t);
+    ctx.data_mut(|d| d.insert_temp(id, t));
+    if p != t.to {
+        ctx.request_repaint();
+    }
+    if p <= 0.0 && !want {
+        return None;
+    }
+    // ease in and out (cubic), as UIKit's rotation
+    let eased = if p < 0.5 { 4.0 * p * p * p } else { 1.0 - (-2.0 * p + 2.0).powi(3) / 2.0 };
+    Some((eased, t.turn))
+}
+
+/// A finger's movement on the turned photo: along its width (+ towards the previous photo, the
+/// way its left edge faces) and across it.
+fn along_turned(d: egui::Vec2, turn: i8) -> (f32, f32) {
+    (d.y * f32::from(turn), d.x)
 }
 
 /// A bar along the top with the safe-area and margins of the compact layout.
@@ -156,66 +304,71 @@ fn top_bar(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
         });
 }
 
+/// The system has a Back of its own (Android's button or gesture, see [`super::back`]): the bars
+/// leave out their ‹.
+const SYSTEM_BACK: bool = cfg!(target_os = "android");
+
 /// The right end of a top bar, filled right to left: "…" ([`more_menu`]), then `add`.
 fn bar_right(app: &mut LightcraftApp, ui: &mut egui::Ui, editor: bool, add: impl FnOnce(&mut LightcraftApp, &mut egui::Ui)) {
     let rest = ui.available_rect_before_wrap();
     let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
     right.spacing_mut().item_spacing.x = 0.0;
-    let more = icon_button(&mut right, "more", Icon::Dots, BUTTON, false, true, "More");
+    let more = icon_button(&mut right, "more", more_icon(), BUTTON, false, true, "More");
+    if app.services.menu_button.is_some() {
+        // the host's own menu: its button over this one takes the tap (see `native_menu`)
+        crate::native_menu::place(ui.ctx(), more.rect, editor);
+    }
     more_menu(app, &more, editor);
     add(app, &mut right);
 }
 
-/// What "…" offers in the editor: the photo's settings and the photo itself.
-const EDITOR_MORE: &[(&str, &str)] = &[
-    ("develop.copy", "Copy Settings"),
-    ("develop.paste", "Paste Settings"),
-    ("develop.reset", "Reset Edits"),
-    ("photo.rotateLeft", "Rotate Left"),
-    ("photo.rotateRight", "Rotate Right"),
-    ("photo.virtualCopy", "Create Virtual Copy"),
-    ("dialog.rename", "Rename…"),
-    ("photo.delete", "Delete Photo"),
-];
-
-/// What "…" offers in the library.
-const LIBRARY_MORE: &[(&str, &str)] = &[
-    ("file.addFolder", "Import from Files…"),
-    ("library.selectAll", "Select All"),
-    ("app.settings", "Settings…"),
-    ("app.about", "About LightCraft"),
-];
-
-/// "…": a short list of what this screen needs, as a phone photo editor has it, then All Menus
-/// (the desktop's menus, for everything else).
+/// "…": the More sheet ([`super::more_sheet`]) with what this screen offers
+/// ([`crate::native_menu::more_items`]), as a phone photo editor has it.
 fn more_menu(app: &mut LightcraftApp, more: &egui::Response, editor: bool) {
-    let has_photo = app.session.active().is_some();
-    let mut picked: Option<&str> = None;
-    egui::Popup::menu(more).show(|ui| {
-        ui.set_min_width(210.0);
-        for (id, label) in if editor { EDITOR_MORE } else { LIBRARY_MORE } {
-            let enabled = !editor || has_photo;
-            let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).frame(false));
-            register(ui, format!("more:{id}"), r.rect);
-            if r.clicked() {
-                picked = Some(id);
-            }
-            // the destructive one apart from the rest
-            if *id == "dialog.rename" {
-                ui.separator();
-            }
+    if !more.clicked() {
+        return;
+    }
+    // (a host with a popup menu of its own opens that: Android's)
+    if app.services.open_menu.is_some() {
+        let items = crate::native_menu::more_items(app, editor);
+        if let Some(open) = app.services.open_menu.as_mut() {
+            open(more.rect, &items);
         }
-        if !app.native_menu {
-            ui.separator();
-            let bottom = Some(ui.max_rect().bottom());
-            let r = ui.menu_button(crate::i18n::tr("All Menus"), |ui| crate::menubar::menus_in(app, ui, bottom));
-            register(ui, "more:allMenus", r.response.rect);
+        return;
+    }
+    super::more_sheet::open(&more.ctx, editor);
+}
+
+/// "…" as each system draws it: three dots in a circle on iOS, stacked on Android, in a row
+/// elsewhere.
+fn more_icon() -> Icon {
+    if cfg!(target_os = "ios") {
+        Icon::DotsCircle
+    } else if cfg!(target_os = "android") {
+        Icon::DotsVertical
+    } else {
+        Icon::Dots
+    }
+}
+
+/// The About dialog's help on a phone: What's New, Send Feedback, Help and System Info as rows a
+/// finger can use (the desktop has them in its Help menu). Nothing in the desktop layout.
+pub fn about_help_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if !is_compact(ui.ctx()) {
+        return;
+    }
+    let mut run = None;
+    for (id, label) in
+        [("app.whatsNew", "What's New"), ("app.feedback", "Send Feedback…"), ("app.help", "LightCraft Help"), ("app.systemInfo", "System Info…")]
+    {
+        if super::more_sheet::row(ui, format!("about:{id}"), crate::i18n::tr(label), true, None, false, false) {
+            run = Some(id);
         }
-    });
-    if let Some(id) = picked
+    }
+    if let Some(id) = run
         && let Err(e) = crate::menubar::run_item(app, id, json!({}))
     {
-        app.toast(&more.ctx, e);
+        app.toast(ui.ctx(), e);
     }
 }
 
@@ -230,26 +383,56 @@ fn unsaved_indicator(app: &LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The library's bar: My Photos, then (from the right) "…", Export, Filter, Import and the
-/// search field in what's left.
+/// The library's bar: My Photos, then (from the right) "…", Share, Filter, Import and the search
+/// field in what's left. While the search is being typed in, the field takes the whole bar with
+/// Cancel after it, as a phone's search does.
 fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if search_open(ui.ctx()) {
+        top_bar(ui, |ui| {
+            let rest = ui.available_rect_before_wrap();
+            let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            let t = Tokens::get(ui.ctx());
+            let cancel = right.add(
+                egui::Button::new(egui::RichText::new(crate::i18n::tr("Cancel")).font(t.font(15.0)).color(t.accent))
+                    .frame(false)
+                    .min_size(vec2(64.0, 40.0)),
+            );
+            register(&right, "button:searchCancel", cancel.rect);
+            if cancel.clicked() {
+                // as on a phone: Cancel drops the search and puts the keyboard away
+                set_search_open(ui.ctx(), false);
+                right.memory_mut(|m| m.surrender_focus(crate::text_field::id("field:search")));
+                if !app.ui.search.is_empty() {
+                    app.ui.search.clear();
+                    let _ = app.run("library.filter", json!({"text": ""}));
+                }
+                return;
+            }
+            right.add_space(4.0);
+            let field = right.available_rect_before_wrap();
+            search(app, &mut right, Rect::from_center_size(field.center(), vec2(field.width(), 34.0)));
+        });
+        return;
+    }
     top_bar(ui, |ui| {
         if icon_button(ui, "sidebar", Icon::Sidebar, BUTTON, app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
             let _ = app.run("view.leftPanel", json!({}));
         }
-        if app.ui.view != ViewMode::PhotoGrid
+        if !SYSTEM_BACK
+            && app.ui.view != ViewMode::PhotoGrid
             && app.ui.view != ViewMode::SquareGrid
             && icon_button(ui, "back", Icon::Back, BUTTON, false, true, "Back").clicked()
         {
             let _ = app.run("view.back", json!({}));
         }
         bar_right(app, ui, false, |app, right| {
-            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Export").clicked() {
-                let _ = app.run("dialog.export", json!({}));
+            let any = app.session.active().is_some() || !app.session.selection.ids.is_empty();
+            if icon_button(right, "share", Icon::Share, BUTTON, false, any, "Share").clicked() {
+                super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
             }
-            let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
-            if icon_button(right, "filter", Icon::Filter, BUTTON, filtering, true, "Filter bar").clicked() {
-                let _ = app.run("view.filterBar", json!({}));
+            // Filter sits on the album row; a folder's own header (Local) has no room for it
+            if !album_row(app) {
+                filter_button(app, right);
             }
             // the system photo picker (or the Files app's) on a phone; the file dialog elsewhere
             if icon_button(right, "import", Icon::Plus, BUTTON, false, true, "Import Photos…").clicked()
@@ -261,13 +444,88 @@ fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             right.add_space(4.0);
             let field = right.available_rect_before_wrap();
             if field.width() >= 80.0 {
-                search(app, right, Rect::from_center_size(field.center(), vec2(field.width(), 32.0)));
+                search(app, right, Rect::from_center_size(field.center(), vec2(field.width(), 34.0)));
             }
         });
     });
 }
 
-/// The search field in `r` (same id and command as the desktop top bar's).
+/// Width of Filter and Sort at the right of the album row ([`album_tools`]).
+pub const ALBUM_TOOLS_W: f32 = 2.0 * BUTTON.x + 4.0;
+
+/// Whether the grid's header is the album row (title and count), which carries Filter and Sort,
+/// rather than a Local folder's path bar.
+fn album_row(app: &LightcraftApp) -> bool {
+    app.session.browse.is_none() || app.session.source != lightcraft_engine::LibrarySource::Folder
+}
+
+/// Filter, with the number of filters on as a badge; it opens the Filter sheet.
+fn filter_button(app: &LightcraftApp, ui: &mut egui::Ui) {
+    let on = super::filter_sheet::active_count(app);
+    let filter = icon_button(ui, "filter", Icon::Filter, BUTTON, on > 0, true, "Filter");
+    if on > 0 {
+        badge(ui, filter.rect, on);
+    }
+    if filter.clicked() {
+        super::filter_sheet::open(ui.ctx());
+    }
+}
+
+/// Filter and Sort at the right end of the grid's album row, `r` ([`ALBUM_TOOLS_W`] wide), next to
+/// what they act on.
+pub fn album_tools(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    row.spacing_mut().item_spacing.x = 4.0;
+    if icon_button(&mut row, "sort", Icon::Sort, BUTTON, false, true, "Sort").clicked() {
+        super::sort_sheet::open(row.ctx());
+    }
+    filter_button(app, &mut row);
+}
+
+/// How many filters are on, as a small dot with the number at the top right of `r`.
+fn badge(ui: &egui::Ui, r: Rect, n: usize) {
+    let t = Tokens::get(ui.ctx());
+    let c = pos2(r.center().x + 11.0, r.center().y - 11.0);
+    ui.painter().circle(c, 8.0, t.accent, Stroke::new(1.5, t.chrome));
+    let text = if n > 9 { "9+".to_string() } else { n.to_string() };
+    ui.painter().text(c, egui::Align2::CENTER_CENTER, text, t.semibold(10.0), egui::Color32::WHITE);
+    register(ui, "indicator:filterCount", Rect::from_center_size(c, vec2(16.0, 16.0)));
+}
+
+fn search_open_id() -> egui::Id {
+    egui::Id::unique("compact-search-open")
+}
+
+/// Whether the search takes the whole bar: from when its field gets the keyboard until it gives it
+/// up (Return, a tap elsewhere) or Cancel. The flag outlives the frame the field loses focus on,
+/// so a tap on Cancel (which takes the focus as the finger goes down) still lands on Cancel.
+fn search_open(ctx: &egui::Context) -> bool {
+    let focused = ctx.memory(|m| m.has_focus(crate::text_field::id("field:search")));
+    let was = ctx.data(|d| d.get_temp::<bool>(search_open_id())).unwrap_or(false);
+    let open = focused || (was && ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()));
+    if open != was {
+        set_search_open(ctx, open);
+    }
+    open
+}
+
+fn set_search_open(ctx: &egui::Context, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(search_open_id(), open));
+}
+
+/// The system's Back while the search takes the bar: as Cancel, the keyboard goes away (the text
+/// stays). False: it wasn't open.
+pub(crate) fn close_search(ctx: &egui::Context) -> bool {
+    if !search_open(ctx) {
+        return false;
+    }
+    set_search_open(ctx, false);
+    ctx.memory_mut(|m| m.surrender_focus(crate::text_field::id("field:search")));
+    true
+}
+
+/// The search field in `r` (same id and command as the desktop top bar's): the magnifier, the text
+/// and, once there is some, ✕ to clear it.
 fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     let id = crate::text_field::id("field:search");
@@ -277,42 +535,70 @@ fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let focused = ui.memory(|m| m.has_focus(id));
     ui.painter().rect(
         r,
-        6.0,
+        17.0,
         if focused { t.canvas } else { t.field },
         Stroke::new(1.0, if focused { t.accent } else { t.field_border }),
         StrokeKind::Inside,
     );
-    let inner = r.shrink2(vec2(10.0, 4.0));
-    if app.ui.search.is_empty() && !focused {
-        paint(ui.painter(), Rect::from_min_size(pos2(inner.left(), r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
+    let inner = r.shrink2(vec2(12.0, 4.0));
+    paint(ui.painter(), Rect::from_min_size(pos2(inner.left(), r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
+    let has_text = !app.ui.search.is_empty();
+    let clear_r = Rect::from_center_size(pos2(r.right() - 17.0, r.center().y), vec2(34.0, 34.0));
+    let right = if has_text { clear_r.left() } else { inner.right() };
+    // one line tall and centred in the field: a touch screen's finger-sized controls would make the
+    // text box taller than the field and set its text (and the hint) above the magnifier
+    let font = t.font(15.0);
+    let line = ui.painter().layout_no_wrap("Ag".to_string(), font.clone(), t.text).size().y;
+    let text = Rect::from_min_max(pos2(inner.left() + 24.0, r.center().y - line / 2.0), pos2(right, r.center().y + line / 2.0));
+    let mut cleared = false;
+    if has_text {
+        let resp = ui.interact(clear_r, ui.scope_id().with("search-clear"), Sense::click());
+        register(ui, "button:searchClear", clear_r);
+        let p = ui.painter();
+        p.circle_filled(clear_r.center(), 8.0, t.text_dim);
+        paint(p, Rect::from_center_size(clear_r.center(), vec2(10.0, 10.0)), Icon::Close, t.field);
+        if resp.clicked() {
+            app.ui.search.clear();
+            cleared = true;
+        }
     }
-    let text = Rect::from_min_max(pos2(inner.left() + 22.0, inner.top()), inner.max);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.spacing_mut().interact_size.y = line;
     // (registered as `field:search` by the field itself, like the desktop's)
     let resp = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
         .frame(false)
-        .hint(crate::i18n::tr("Search"))
+        .margin(egui::Margin::ZERO)
+        .hint(crate::i18n::tr("Search photos"))
         .width(text.width())
-        .font(t.font(14.0))
+        .font(font)
         .text_color(t.text)
         .show(&mut child)
         .response;
-    if resp.changed() {
+    if cleared {
+        // after the field, which gives the keyboard up on a tap outside it (the ✕ is outside)
+        ui.memory_mut(|m| m.request_focus(id));
+    }
+    if resp.changed() || cleared {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));
     }
 }
 
-/// The editor's bar: Back to the photos, then (from the right) "…", Export, Redo, Undo and
+/// The editor's bar: Back to the photos, then (from the right) "…", Share, Rate, Redo, Undo and
 /// Show Original (held down: the photo as shot, let go: the edit).
 fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     top_bar(ui, |ui| {
-        if icon_button(ui, "back", Icon::ChevronLeft, BUTTON, false, true, "Back").clicked() {
+        if !SYSTEM_BACK && icon_button(ui, "back", Icon::ChevronLeft, BUTTON, false, true, "Back").clicked() {
             let _ = app.run("view.back", json!({}));
         }
         bar_right(app, ui, true, |app, right| {
-            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Export").clicked() {
-                let _ = app.run("dialog.export", json!({}));
+            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Share").clicked() {
+                super::share_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, true));
+            }
+            let active = app.session.active();
+            let rated = active.and_then(|id| app.session.catalog.photo(id)).is_some_and(|p| p.rating > 0);
+            if icon_button(right, "rate", if rated { Icon::StarFilled } else { Icon::Star }, BUTTON, false, active.is_some(), "Rate").clicked() {
+                super::rate_sheet::open(right.ctx(), active.into_iter().collect());
             }
             if undo_button(right, "redo", "Redo", true).clicked() {
                 let _ = app.run("edit.redo", json!({}));
@@ -325,6 +611,61 @@ fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             unsaved_indicator(app, right);
         });
     });
+}
+
+/// How long a finger rests on the photo before it shows the photo as shot (shorter than egui's
+/// long press, 0.8 s, which also only fires on a frame that something else wakes).
+const HOLD_ORIGINAL: f64 = 0.35;
+/// How far a resting finger may drift and still be holding (points), past which it is a swipe or
+/// a pan.
+const HOLD_SLOP: f32 = 10.0;
+
+fn hold_photo_id() -> egui::Id {
+    egui::Id::unique("compact-hold-photo-original")
+}
+
+/// A finger is holding the photo as shot ([`hold_original_on_photo`]): its lift is the end of the
+/// hold, not a tap.
+pub(crate) fn holding_original(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<crate::state::BeforeAfter>(hold_photo_id())).is_some()
+}
+
+/// One finger resting on the photo in the editor: the photo as shot until it lifts (the view it
+/// replaced comes back then), as the Show Original button does. Followed from the pointer, not
+/// egui's long press: a still finger sends no events, so the frame that shows it is asked for here.
+pub(crate) fn hold_original_on_photo(app: &mut LightcraftApp, resp: &egui::Response) {
+    let ctx = &resp.ctx;
+    let key = hold_photo_id();
+    let (down, touches, pinch, start, origin, pos, now) = ctx.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.any_touches(),
+            i.multi_touch().is_some(),
+            i.pointer.press_start_time(),
+            i.pointer.press_origin(),
+            i.pointer.latest_pos(),
+            i.time,
+        )
+    });
+    if let Some(before) = ctx.data(|d| d.get_temp::<crate::state::BeforeAfter>(key)) {
+        if !down && !touches {
+            ctx.data_mut(|d| d.remove::<crate::state::BeforeAfter>(key));
+            app.ui.before_after = before;
+        }
+        return;
+    }
+    let (Some(start), Some(origin)) = (start, origin) else { return };
+    let resting = down && touches && !pinch && resp.rect.contains(origin) && pos.is_none_or(|p| p.distance(origin) <= HOLD_SLOP);
+    if !resting {
+        return;
+    }
+    let held = now - start;
+    if held >= HOLD_ORIGINAL {
+        ctx.data_mut(|d| d.insert_temp(key, app.ui.before_after));
+        app.ui.before_after = crate::state::BeforeAfter::Original;
+    } else {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(HOLD_ORIGINAL - held));
+    }
 }
 
 /// Show Original held down: the press shows the photo as shot, and the release brings back the
@@ -371,83 +712,169 @@ fn undo_button(ui: &mut egui::Ui, id: &str, tip: &str, redo: bool) -> egui::Resp
     r
 }
 
-/// The library's bottom bar: the grid sizes and Detail, Sort and Select (a tap on a photo opens
-/// the editor, so there is no Edit button). In Select mode by finger it is the selection's bar instead
-/// ([`select_bar`]).
+/// The library's bottom bar on a phone: only Select mode's ([`select_bar`]). Otherwise there is
+/// none: a pinch sets the grid's size, a tap on a photo opens the editor, a long press (or "…" →
+/// Select Photos) starts Select mode, and Sort sits on the album row.
 fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    if app.ui.select_mode && crate::widgets::touch_screen(ui.ctx()) {
+    if app.ui.select_mode {
         egui::Panel::bottom("bottom_bar")
             .exact_size(t.bottom_bar_h + 4.0)
             .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN + 6, right: BAR_MARGIN, top: 0, bottom: 0 }))
             .show(ui, |ui| select_bar(app, ui));
-        return;
     }
-    egui::Panel::bottom("bottom_bar")
-        .exact_size(t.bottom_bar_h + 4.0)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN, right: BAR_MARGIN, top: 0, bottom: 0 }))
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for (id, icon, mode, tip) in [
-                    ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
-                    ("squareGrid", Icon::GridSquare, ViewMode::SquareGrid, "Square Grid (G toggles)"),
-                    ("detail", Icon::Single, ViewMode::Detail, "Detail (D)"),
-                ] {
-                    if icon_button(ui, id, icon, BUTTON, app.ui.view == mode, true, tip).clicked() {
-                        let _ = app.run(&format!("view.{id}"), json!({}));
-                    }
-                }
-                let sort = icon_button(ui, "sort", Icon::Sort, BUTTON, false, true, "Sort");
-                egui::Popup::menu(&sort).show(|ui| super::bottombar::sort_menu(app, ui));
-                super::bottombar::select_mode_button(app, ui);
-            });
-        });
 }
 
-/// Select mode's bar: how many photos are selected, then Share (export), Album, Move to Folder,
-/// Delete, and Done (leaves Select mode).
+/// A frameless text button of the select bar, as tall as a finger; true when tapped.
+fn bar_text_button(ui: &mut egui::Ui, id: &str, label: &str, color: egui::Color32, enabled: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { color } else { t.text_disabled };
+    let b = ui.add_enabled(
+        enabled,
+        egui::Button::new(egui::RichText::new(crate::i18n::tr(label)).font(t.semibold(14.0)).color(color)).frame(false).min_size(vec2(0.0, 44.0)),
+    );
+    register(ui, format!("button:{id}"), b.rect);
+    b.clicked()
+}
+
+/// Select mode's bar: how many photos are selected and Deselect All, then Rate, Album, Move to
+/// Folder, Delete, and Done (leaves Select mode; not on Android, whose Back does). In Recently Deleted, Restore and Delete
+/// Permanently take the place of the others. Share is the top bar's, which shares the selection.
 fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let n = app.session.selection.ids.len();
     let any = n > 0;
-    ui.horizontal_centered(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        let count = if any { crate::i18n::tr_format!("{n} selected", n = n) } else { crate::i18n::tr("Select Photos").to_string() };
-        ui.label(egui::RichText::new(count).font(t.semibold(14.0)).color(t.text));
-        let full = ui.max_rect();
-        let mut right = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(pos2(full.center().x - 60.0, full.top()), full.max))
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        right.spacing_mut().item_spacing.x = 2.0;
+    let trash = app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted || crate::menubar::selection_deleted(app);
+    let full = ui.available_rect_before_wrap();
+    // the buttons first, from the right edge: what they leave is the count's and Deselect All's
+    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(full).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    right.spacing_mut().item_spacing.x = 2.0;
+    select_actions(app, &mut right, any, trash);
+    let room = Rect::from_min_max(full.min, pos2((right.min_rect().left() - 6.0).max(full.left()), full.bottom()));
+    let mut left = ui.new_child(egui::UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    left.spacing_mut().item_spacing.x = 2.0;
+    let count = if any { crate::i18n::tr_format!("{n} selected", n = n) } else { crate::i18n::tr("Select Photos").to_string() };
+    let font = t.semibold(14.0);
+    let width = |s: &str| left.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x;
+    // (with less room, Deselect All is a ✕ after the count; with less still, the count is cut)
+    let deselect = crate::i18n::tr("Deselect All");
+    let words = any && width(&count) + 6.0 + width(deselect) + 16.0 <= room.width();
+    let mark = if any && !words { BUTTON.x } else { 0.0 };
+    let shown = crate::widgets::elide_head(&count, (room.width() - mark - 4.0).max(0.0), width);
+    left.label(egui::RichText::new(shown).font(font.clone()).color(t.text));
+    let none = if words {
+        left.add_space(4.0);
+        bar_text_button(&mut left, "selectNone", "Deselect All", t.accent, true)
+    } else {
+        any && icon_button(&mut left, "selectNone", Icon::Close, BUTTON, false, true, "Deselect All").clicked()
+    };
+    if none {
+        let _ = crate::menubar::run_item(app, "library.selectNone", json!({}));
+    }
+    ui.allocate_rect(full, Sense::hover());
+}
+
+/// Select mode's buttons, right to left: Done (not on Android, whose Back leaves Select mode),
+/// then Delete, Move to Folder, Rate and Add to Album, or in Recently Deleted Restore and Delete
+/// Permanently.
+fn select_actions(app: &mut LightcraftApp, right: &mut egui::Ui, any: bool, trash: bool) {
+    let t = Tokens::get(right.ctx());
+    if !SYSTEM_BACK {
         let done = right.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Done")).font(t.semibold(14.0)).color(t.accent)).frame(false));
-        register(&right, "button:selectDone", done.rect);
+        register(right, "button:selectDone", done.rect);
         if done.clicked() {
             let _ = app.run("view.selectMode", json!({"on": false}));
         }
-        if icon_button(&mut right, "selectDelete", Icon::Trash, BUTTON, false, any, "Delete").clicked() {
-            let _ = crate::menubar::run_item(app, "photo.delete", json!({}));
+    }
+    if trash {
+        // the photos are deleted already: put them back, or remove them for good
+        if trash_button(right, any) {
+            let _ = crate::menubar::run_item(app, "photo.deletePermanently", json!({}));
         }
-        if crate::panels::grid::can_move_to_folder(app)
-            && icon_button(&mut right, "selectMove", Icon::Folder, BUTTON, false, any, "Move to Folder…").clicked()
-        {
-            crate::panels::grid::move_to_folder(app, right.ctx());
+        if bar_text_button(right, "selectRestore", "Restore", t.accent, any) {
+            let _ = crate::menubar::run_item(app, "photo.restore", json!({}));
         }
-        let album = icon_button(&mut right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
-        if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
-            egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
-        }
-        if icon_button(&mut right, "selectShare", Icon::Share, BUTTON, false, any, "Export").clicked() {
-            let _ = app.run("dialog.export", json!({}));
-        }
-    });
+        return;
+    }
+    if icon_button(right, "selectDelete", Icon::Trash, BUTTON, false, any, "Delete").clicked() {
+        let _ = crate::menubar::run_item(app, "photo.delete", json!({}));
+    }
+    if crate::panels::grid::can_move_to_folder(app) && icon_button(right, "selectMove", Icon::Folder, BUTTON, false, any, "Move to Folder…").clicked()
+    {
+        crate::panels::grid::move_to_folder(app, right.ctx());
+    }
+    if icon_button(right, "selectRate", Icon::Star, BUTTON, false, any, "Rate").clicked() {
+        super::rate_sheet::open(right.ctx(), super::share_sheet::photos_to_share(app, false));
+    }
+    let album = icon_button(right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
+    if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
+        egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
+    }
+}
+
+/// Delete Permanently: the trash in red (it can be undone, but not from Recently Deleted).
+fn trash_button(ui: &mut egui::Ui, enabled: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(BUTTON.x, 44.0), if enabled { Sense::click() } else { Sense::hover() });
+    register(ui, "icon:selectDeletePermanently", r);
+    let label = crate::i18n::tr("Delete Permanently");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    if enabled && resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(r.shrink(2.0), 8.0, t.hover);
+    }
+    paint(ui.painter(), Rect::from_center_size(r.center(), vec2(20.0, 20.0)), Icon::Trash, if enabled { t.reject } else { t.text_disabled });
+    let clicked = enabled && resp.clicked();
+    resp.on_hover_text(label);
+    clicked
 }
 
 fn close_sheet(app: &mut LightcraftApp) {
     app.ui.right = RightPanel::None;
     app.ui.presets = false;
+}
+
+fn chrome_hidden_id() -> egui::Id {
+    egui::Id::unique("compact-editor-chrome-hidden")
+}
+
+/// Whether a tap on the photo hid the editor's bars and sheet (as a phone photo editor does).
+pub fn chrome_hidden(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(chrome_hidden_id())).unwrap_or(false)
+}
+
+/// A tap on the photo in the editor: its bars and sheet go, or come back.
+pub(crate) fn toggle_chrome(ctx: &egui::Context) {
+    let hidden = !chrome_hidden(ctx);
+    ctx.data_mut(|d| d.insert_temp(chrome_hidden_id(), hidden));
+    // flipped after the bars were laid out (a tap is seen late in the frame): draw the next frame
+    // now, or the flip waits for whatever wakes the app next (an idle phone draws nothing)
+    ctx.request_repaint();
+}
+
+/// Crop with the editor's chrome hidden: the bars and sheet keep their room, so the photo stays
+/// where it is, and are covered with the canvas's colour; a tap on them brings them back.
+/// `photo`: the room left for the photo.
+fn cover_chrome(ctx: &egui::Context, photo: Rect) {
+    let t = Tokens::get(ctx);
+    let screen = ctx.viewport_rect();
+    let parts = [
+        Rect::from_min_max(screen.min, egui::pos2(screen.right(), photo.top())),
+        Rect::from_min_max(egui::pos2(screen.left(), photo.bottom()), screen.max),
+        Rect::from_min_max(egui::pos2(screen.left(), photo.top()), egui::pos2(photo.left(), photo.bottom())),
+        Rect::from_min_max(egui::pos2(photo.right(), photo.top()), egui::pos2(screen.right(), photo.bottom())),
+    ];
+    for (i, r) in parts.into_iter().enumerate() {
+        if r.width() < 0.5 || r.height() < 0.5 {
+            continue;
+        }
+        egui::Area::new(egui::Id::unique("compact-chrome-cover").with(i)).order(egui::Order::Foreground).fixed_pos(r.min).show(ctx, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(r.size(), Sense::click());
+            ui.painter().rect_filled(rect, 0.0, t.canvas);
+            if resp.clicked() {
+                toggle_chrome(ctx);
+            }
+        });
+    }
 }
 
 /// What a tab of the editor's tool row opens.
@@ -545,6 +972,14 @@ fn press(app: &mut LightcraftApp, ctx: &egui::Context, tab: Tab) {
     }
 }
 
+/// Press the tool row's tab `id` (`icon:{id}`), wherever the row is scrolled (tests).
+#[cfg(test)]
+pub(crate) fn press_tab(app: &mut LightcraftApp, ctx: &egui::Context, id: &str) {
+    if let Some((.., tab)) = TABS.iter().find(|(i, ..)| *i == id) {
+        press(app, ctx, *tab);
+    }
+}
+
 /// The tool row (or, `vertical`, column): each tab an icon over its name, the open one lit.
 fn tool_tabs(app: &mut LightcraftApp, ui: &mut egui::Ui, vertical: bool) {
     let t = Tokens::get(ui.ctx());
@@ -566,21 +1001,30 @@ fn tool_tabs(app: &mut LightcraftApp, ui: &mut egui::Ui, vertical: bool) {
             }
         }
     };
-    let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() };
+    // dragged by the finger anywhere on the row: no scroll bar to grab as well (a phone's tool
+    // rows have none)
+    let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, scroll_bar: false, ..Default::default() };
+    let hidden = egui::scroll_area::ScrollBarVisibility::AlwaysHidden;
     if vertical {
-        egui::ScrollArea::vertical().id_salt("compact-tools").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                row(ui);
-            });
-        });
+        egui::ScrollArea::vertical().id_salt("compact-tools").scroll_source(drag).scroll_bar_visibility(hidden).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    row(ui);
+                });
+            },
+        );
     } else {
-        egui::ScrollArea::horizontal().id_salt("compact-tools").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                row(ui);
-            });
-        });
+        egui::ScrollArea::horizontal().id_salt("compact-tools").scroll_source(drag).scroll_bar_visibility(hidden).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    row(ui);
+                });
+            },
+        );
     }
 }
 
@@ -665,6 +1109,10 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     if let Some((key, on)) = eye {
                         section_eye(app, ui, key, on);
                     }
+                    // Presets: + and "…" here, beside the title, not in a strip of their own
+                    if app.ui.presets {
+                        super::presets::header_buttons(app, ui, 36.0);
+                    }
                 });
             });
         });
@@ -689,7 +1137,12 @@ fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         _ => {
             register(ui, "panel:right_panel", ui.available_rect_before_wrap());
+            // a tool's panel (Crop, Masking, Remove, Info …): the desktop's, with a finger's
+            // controls, dropdown lists included
+            finger_style(ui);
+            let before = crate::widgets::set_finger_scope(true);
             super::right::show(app, ui);
+            crate::widgets::set_finger_scope(before);
         }
     }
 }
@@ -759,6 +1212,80 @@ pub fn dialog<'a>(ctx: &egui::Context, win: egui::Window<'a>) -> egui::Window<'a
     let w = area.width().min(DIALOG_MAX_W);
     // auto-sized: as tall as its contents up to the screen, then it scrolls
     win.auto_sized().min_width(w).max_width(w).max_height(area.height()).vscroll(true).constrain_to(area)
+}
+
+/// Where a full sheet goes: the width of the screen, from just under the status bar to the
+/// bottom edge (under the home indicator too; [`sheet_frame`] keeps its content above it).
+pub fn sheet_rect(ctx: &egui::Context) -> Rect {
+    let screen = ctx.viewport_rect();
+    let safe = ctx.content_rect();
+    // the soft keyboard up: the sheet ends on it, so its fields and confirm stay in view
+    let bottom = if keyboard_up(ctx) { safe.bottom() } else { screen.bottom() };
+    Rect::from_min_max(egui::pos2(screen.left(), safe.top() + 8.0), egui::pos2(screen.right(), bottom))
+}
+
+/// The soft keyboard takes the bottom of the screen: far more than a home indicator's inset.
+fn keyboard_up(ctx: &egui::Context) -> bool {
+    ctx.viewport_rect().bottom() - ctx.content_rect().bottom() > 80.0
+}
+
+/// A full sheet's frame: rounded at the top, square where it meets the bottom edge, its content
+/// clear of the home indicator.
+pub fn sheet_frame(ctx: &egui::Context) -> egui::Frame {
+    // (the home indicator's inset; with the keyboard up the sheet ends on the keyboard instead)
+    let inset = if keyboard_up(ctx) { 0.0 } else { (ctx.viewport_rect().bottom() - ctx.content_rect().bottom()).max(0.0) };
+    egui::Frame::window(&ctx.global_style()).corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 }).inner_margin(egui::Margin {
+        left: 16,
+        right: 16,
+        top: 6,
+        bottom: (12.0 + inset).round() as i8,
+    })
+}
+
+/// How long a sheet takes to slide up (seconds).
+const SHEET_SLIDE: f64 = 0.28;
+
+/// `win` as a full sheet ([`sheet_rect`]) that slides up from the bottom edge when it is first
+/// shown, then stays: its pages change inside it. `id`: the window's, to time the slide by.
+pub fn sheet_window<'a>(ctx: &egui::Context, win: egui::Window<'a>, id: egui::Id) -> egui::Window<'a> {
+    let full = sheet_rect(ctx);
+    let key = id.with("sheet-shown");
+    let pass = ctx.cumulative_pass_nr();
+    let now = ctx.input(|i| i.time);
+    // (shown again after a pass without it: the slide starts over)
+    let start = match ctx.data(|d| d.get_temp::<(f64, u64)>(key)) {
+        Some((start, last)) if last + 1 >= pass => start,
+        _ => now,
+    };
+    ctx.data_mut(|d| d.insert_temp(key, (start, pass)));
+    let t = ((now - start) / SHEET_SLIDE).clamp(0.0, 1.0) as f32;
+    if t < 1.0 {
+        ctx.request_repaint();
+    }
+    // ease out: fast at first, settling into place
+    let shown = 1.0 - (1.0 - t).powi(3);
+    let rect = full.translate(egui::vec2(0.0, (1.0 - shown) * full.height()));
+    win.fixed_rect(rect).constrain(false).vscroll(false)
+}
+
+/// Finger-sized controls for a dialog in the compact layout: 44 pt buttons and fields, 16 pt
+/// text, larger check boxes and radio buttons, and more room between rows. Nothing elsewhere.
+pub fn finger_style(ui: &mut egui::Ui) {
+    if !is_compact(ui.ctx()) {
+        return;
+    }
+    let s = ui.style_mut();
+    s.spacing.interact_size.y = 44.0;
+    s.spacing.button_padding = vec2(16.0, 11.0);
+    s.spacing.item_spacing = vec2(10.0, 12.0);
+    s.spacing.icon_width = 24.0;
+    s.spacing.icon_width_inner = 14.0;
+    s.spacing.icon_spacing = 10.0;
+    for style in [egui::TextStyle::Body, egui::TextStyle::Button, egui::TextStyle::Monospace] {
+        if let Some(f) = s.text_styles.get_mut(&style) {
+            f.size = f.size.max(16.0);
+        }
+    }
 }
 
 /// A labelled row for dialogs: in the compact layout the label sits above its controls, which
